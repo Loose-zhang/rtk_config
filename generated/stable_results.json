@@ -1,0 +1,17 @@
+[
+  {
+    "stationId": "3530812",
+    "ecef_x": "-1932877.0261",
+    "ecef_y": "5106589.0187",
+    "ecef_z": "3286374.3105",
+    "lat": "31.213321584",
+    "lon": "110.731978976",
+    "height": "444.6838",
+    "sampleCount": 38,
+    "timestamp": "2025-11-16T06:41:29.935Z",
+    "filtered": true,
+    "originalSampleCount": 38,
+    "removedSampleCount": 2,
+    "id": "3530812_1763275290153"
+  }
+]

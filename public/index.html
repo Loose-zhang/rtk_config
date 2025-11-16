@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RTKRCV 配置文件生成器</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📡 RTKRCV 配置文件生成器</h1>
+            <p class="subtitle">快速创建和配置 RTKLIB 实时定位配置文件</p>
+        </header>
+
+        <main>
+            <div class="card">
+                <h2>配置参数</h2>
+                <form id="configForm">
+                    <!-- NTRIP 数据流配置 -->
+                    <div class="form-section">
+                        <h3>🌐 NTRIP 数据流配置</h3>
+                        
+                        <div class="form-group">
+                            <label for="inpstr1">
+                                <span class="label-text">数据流 1 (inpstr1-path)</span>
+                                <span class="label-hint">格式: user:password@host:port/mountpoint</span>
+                            </label>
+                            <input 
+                                type="text" 
+                                id="inpstr1" 
+                                name="inpstr1" 
+                                placeholder="例如: beidou:29832611@8.134.185.53:8001/6539837"
+                                value="beidou:29832611@8.134.185.53:8001/6539837"
+                                required
+                            >
+                        </div>
+
+                        <div class="form-group">
+                            <label for="inpstr2">
+                                <span class="label-text">数据流 2 (inpstr2-path)</span>
+                                <span class="label-hint">格式: user:password@host:port/mountpoint</span>
+                            </label>
+                            <input 
+                                type="text" 
+                                id="inpstr2" 
+                                name="inpstr2" 
+                                placeholder="例如: ytcors14847:fyx25943@gnss.ytcors.cn:8003/RTCM33GRCEJpro"
+                                value="ytcors14847:fyx25943@gnss.ytcors.cn:8003/RTCM33GRCEJpro"
+                                required
+                            >
+                        </div>
+
+                        <div class="form-group">
+                            <label for="inpstr3">
+                                <span class="label-text">数据流 3 (inpstr3-path)</span>
+                                <span class="label-hint">格式: user:password@host:port/mountpoint</span>
+                            </label>
+                            <input 
+                                type="text" 
+                                id="inpstr3" 
+                                name="inpstr3" 
+                                placeholder="例如: Ming:@Zhang12345@ntrip.data.gnss.ga.gov.au:2101/BCEP00BKG0"
+                                value="Ming:@Zhang12345@ntrip.data.gnss.ga.gov.au:2101/BCEP00BKG0"
+                                required
+                            >
+                        </div>
+                    </div>
+
+                    <!-- 输出配置 -->
+                    <div class="form-section">
+                        <h3>📊 输出配置</h3>
+                        
+                        <div class="form-group">
+                            <label for="outHeight">
+                                <span class="label-text">高度类型 (out-height)</span>
+                                <span class="label-hint">选择输出高度的参考系统</span>
+                            </label>
+                            <select id="outHeight" name="outHeight" required>
+                                <option value="0">0 - 椭球高 (ellipsoidal)</option>
+                                <option value="1" selected>1 - 大地高 (geodetic)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">
+                            <span>🚀 生成配置文件</span>
+                        </button>
+                        <button type="reset" class="btn btn-secondary">
+                            <span>🔄 重置表单</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- 结果显示区域 -->
+            <div id="resultSection" class="card result-section" style="display: none;">
+                <h2>✅ 生成结果</h2>
+                <div id="resultMessage" class="result-message"></div>
+                <div class="result-actions">
+                    <button id="downloadBtn" class="btn btn-success">
+                        <span>📥 下载配置文件</span>
+                    </button>
+                    <button id="viewContentBtn" class="btn btn-info">
+                        <span>👁️ 查看内容</span>
+                    </button>
+                    <button id="startRtkcrvBtn" class="btn btn-primary">
+                        <span>🚀 启动 RTKRCV</span>
+                    </button>
+                </div>
+                <div id="processStatus" class="process-status" style="display: none;"></div>
+            </div>
+
+            <!-- 配置文件内容预览 -->
+            <div id="contentPreview" class="card" style="display: none;">
+                <h2>📄 配置文件内容</h2>
+                <pre id="configContent" class="config-preview"></pre>
+                <button id="closePreviewBtn" class="btn btn-secondary">关闭预览</button>
+            </div>
+
+            <!-- 实时RTKRCV数据监控 -->
+            <div class="card">
+                <h2>📡 实时 RTKRCV 数据监控</h2>
+                <div class="realtime-status">
+                    <span id="connectionStatus" class="status-badge stopped">未连接</span>
+                    <span id="dataCount">站点数: 0</span>
+                </div>
+                <div id="realtimeData" class="realtime-data">
+                    <p class="empty-state">等待数据...</p>
+                </div>
+            </div>
+
+            <!-- 稳定结果历史记录 -->
+            <div class="card">
+                <h2>📊 稳定结果历史记录</h2>
+                <div class="stable-results-header">
+                    <p class="subtitle">永久保存所有站点达到稳定后的平均坐标</p>
+                    <button class="btn btn-success btn-small" onclick="exportStableResults()">
+                        📥 导出CSV
+                    </button>
+                </div>
+                <div id="stableResultsTable" class="stable-results-table">
+                    <p class="loading">加载中...</p>
+                </div>
+            </div>
+
+            <!-- 网格布局：进程和配置文件并排 -->
+            <div class="grid-container">
+                <!-- 运行中的 RTKRCV 进程 -->
+                <div class="card">
+                    <h2>⚡ 运行中的进程</h2>
+                    <div id="processList" class="process-list">
+                        <p class="empty-state">暂无运行中的进程</p>
+                    </div>
+                </div>
+
+                <!-- 已生成的配置文件列表 -->
+                <div class="card">
+                    <h2>📂 配置文件</h2>
+                    <div id="configList" class="config-list">
+                        <p class="loading">加载中...</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>© 2024 RTKRCV 配置生成器 | 基于 RTKLIB</p>
+        </footer>
+    </div>
+
+    <!-- HEX配置模态框 -->
+    <div id="hexModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>📡 设备配置命令</h3>
+                <button class="modal-close" onclick="closeHexModal()">✕</button>
+            </div>
+            <div class="modal-body" id="hexModalBody">
+                <!-- 内容将通过 JavaScript 动态填充 -->
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
+
