@@ -119,6 +119,86 @@
                 <button id="closePreviewBtn" class="btn btn-secondary">关闭预览</button>
             </div>
 
+            <!-- 批量运行 -->
+            <div class="card">
+                <h2>📦 批量运行（从TXT）</h2>
+                <div class="form-section">
+                    <h3>🧩 批量参数</h3>
+                    <div class="form-group">
+                        <label for="batchInpstr1Base">
+                            <span class="label-text">公共前缀 (inpstr1Base)</span>
+                            <span class="label-hint">到挂载点前即可，程序会自动拼接站点编号，例如: user:pass@host:port/</span>
+                        </label>
+                        <input
+                            type="text"
+                            id="batchInpstr1Base"
+                            placeholder="例如: beidou:29832611@8.134.185.53:8001/"
+                            value="beidou:29832611@8.134.185.53:8001/"
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="batchInpstr2">
+                            <span class="label-text">数据流 2 (可选，留空则使用模板)</span>
+                        </label>
+                        <input
+                            type="text"
+                            id="batchInpstr2"
+                            placeholder="留空将从模板 bbb.conf 读取"
+                            value=""
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="batchInpstr3">
+                            <span class="label-text">数据流 3 (可选，留空则使用模板)</span>
+                        </label>
+                        <input
+                            type="text"
+                            id="batchInpstr3"
+                            placeholder="留空将从模板 bbb.conf 读取"
+                            value=""
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label>
+                            <span class="label-text">TXT 选择</span>
+                            <span class="label-hint">每行：站点编号 空格 out-height（0或1）。例如：6539837 1</span>
+                        </label>
+                        <input type="file" id="batchTxtFile" accept=".txt,text/plain">
+                        <div style="margin:10px 0; color: var(--text-light);">或直接粘贴内容：</div>
+                        <textarea id="batchTxtText" rows="5" placeholder="6539837 1&#10;6539840 1&#10;6539842 0" style="width:100%; border:2px solid var(--border-color); border-radius:8px; padding:10px; font-family:'Courier New', monospace;"></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="batchConcurrency">
+                            <span class="label-text">并发数量（每次解算的站点数）</span>
+                            <span class="label-hint">限制同时运行的 RTKRCV 进程数，建议 3~10</span>
+                        </label>
+                        <input type="number" id="batchConcurrency" min="1" max="50" value="5" style="max-width:180px;">
+                    </div>
+
+                    <div class="form-actions">
+                        <button id="batchRunBtn" class="btn btn-primary">
+                            🚀 批量运行
+                        </button>
+                        <button id="batchClearBtn" class="btn btn-secondary">
+                            🧹 清空结果
+                        </button>
+                        <button id="batchCancelBtn" class="btn btn-danger">
+                            ⏹ 中断批量
+                        </button>
+                    </div>
+                </div>
+
+                <div id="batchResults" class="result-section" style="display:none; margin-top:12px;">
+                    <h3>📋 执行结果</h3>
+                    <div id="batchSummary" class="result-message" style="margin-top:10px;"></div>
+                    <div id="batchTableContainer" class="stable-results-table"></div>
+                </div>
+            </div>
+
             <!-- 实时RTKRCV数据监控 -->
             <div class="card">
                 <h2>📡 实时 RTKRCV 数据监控</h2>

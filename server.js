@@ -30,6 +30,64 @@ const ecefCache = new Map();
 // 格式: { stationId: { status: 'collecting'|'stable', startTime: Date, samples: [], average: {} } }
 const stationStability = new Map();
 
+// 批量调度器（限制并发）
+const batchScheduler = {
+  active: false,
+  concurrency: 5,
+  pending: [],
+  running: new Set(),
+  options: null // { inpstr1Base, inpstr2, inpstr3 }
+};
+
+function batchSchedulerFillSlots(startedNowCollector) {
+  if (!batchScheduler.active) return;
+  while (batchScheduler.running.size < batchScheduler.concurrency && batchScheduler.pending.length > 0) {
+    const item = batchScheduler.pending.shift();
+    const stationId = item.stationId;
+    try {
+      const inp1 = `${ensureTrailingSlash(batchScheduler.options.inpstr1Base)}${stationId}`;
+      const { fileName } = generateConfigFile({
+        inpstr1: inp1,
+        inpstr2: batchScheduler.options.inpstr2,
+        inpstr3: batchScheduler.options.inpstr3,
+        outHeight: item.outHeight
+      });
+      const startInfo = startRtkrcvInternal(fileName);
+      batchScheduler.running.add(stationId);
+      if (startedNowCollector) {
+        startedNowCollector.push({
+          stationId,
+          configFile: fileName,
+          pid: startInfo.pid,
+          logFile: startInfo.logFileName,
+          success: true
+        });
+      }
+    } catch (e) {
+      if (startedNowCollector) {
+        startedNowCollector.push({
+          stationId,
+          error: e.message || String(e),
+          success: false
+        });
+      }
+    }
+  }
+  if (batchScheduler.pending.length === 0 && batchScheduler.running.size === 0) {
+    batchScheduler.active = false;
+    batchScheduler.options = null;
+  }
+}
+
+function batchSchedulerOnProcessExit(stationId) {
+  if (!batchScheduler.active) return;
+  if (batchScheduler.running.has(stationId)) {
+    batchScheduler.running.delete(stationId);
+    // 尝试继续填充新的任务
+    batchSchedulerFillSlots(null);
+  }
+}
+
 // Middleware
 app.use(cors({ origin: config.corsOrigin }));
 app.use(bodyParser.json());
@@ -98,6 +156,132 @@ function readTemplate() {
     log('error', `Error reading template: ${error.message}`);
     throw error;
   }
+}
+
+// 生成配置文件（可复用）
+function generateConfigFile({ inpstr1, inpstr2, inpstr3, outHeight }) {
+  // 读取模板
+  let configContent = readTemplate();
+  
+  // 替换配置项
+  configContent = configContent.replace(/^inpstr1-path\s*=.*$/m, `inpstr1-path       =${inpstr1}`);
+  configContent = configContent.replace(/^inpstr2-path\s*=.*$/m, `inpstr2-path       =${inpstr2}`);
+  configContent = configContent.replace(/^inpstr3-path\s*=.*$/m, `inpstr3-path       =${inpstr3}`);
+  configContent = configContent.replace(/^out-height\s*=.*$/m, `out-height         =${outHeight}   # (0:ellipsoidal,1:geodetic)`);
+  
+  // 同时更新输出文件路径，使用固定 TCP 输出至本服务
+  const mountPoint = extractMountPoint(inpstr1);
+  configContent = configContent.replace(/^outstr1-path\s*=.*$/m, `outstr1-path       =127.0.0.1:60000`);
+  configContent = configContent.replace(/^outstr2-path\s*=.*$/m, `outstr2-path       =127.0.0.1:60000`);
+  
+  // 生成文件名
+  const fileName = `${mountPoint}.conf`;
+  const filePath = path.join(config.generatedDir, fileName);
+  
+  // 确保 generated 目录存在
+  ensureDirectories();
+  
+  // 写入文件
+  fs.writeFileSync(filePath, configContent, 'utf-8');
+  log('info', `Generated config file: ${fileName}`);
+  
+  return { fileName, filePath, content: configContent };
+}
+
+// 保证 base 以单个斜杠结尾
+function ensureTrailingSlash(base) {
+  if (!base.endsWith('/')) return `${base}/`;
+  return base;
+}
+
+// 解析站点TXT：每行格式 "stationId outHeight"
+function parseStationsTxt(filePath) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`TXT 文件不存在: ${filePath}`);
+  }
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const lines = content.split(/\r?\n/);
+  const items = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || line.startsWith('//')) continue;
+    const parts = line.split(/\s+/);
+    if (parts.length < 2) continue;
+    const stationId = parts[0];
+    const outHeight = parseInt(parts[1], 10);
+    if (!stationId) continue;
+    if (Number.isNaN(outHeight)) continue;
+    items.push({ stationId, outHeight });
+  }
+  return items;
+}
+
+// 启动 RTKRCV（内部复用版本）
+function startRtkrcvInternal(configFile) {
+  // 检查配置文件是否存在
+  const configPath = path.join(config.generatedDir, configFile);
+  if (!fs.existsSync(configPath)) {
+    throw new Error('配置文件不存在');
+  }
+  // 检查是否已经在运行
+  if (runningProcesses.has(configFile)) {
+    throw new Error('该配置的 RTKRCV 已在运行中');
+  }
+  const rtkcrvPath = config.rtkcrvPath;
+  const rtkcrvExePath = fs.existsSync(rtkcrvPath) ? rtkcrvPath : (
+    process.platform === 'win32' ? 'rtkrcv.exe' : 'rtkrcv'
+  );
+  log('info', `Using RTKRCV executable: ${rtkcrvExePath}`);
+  log('info', `Working directory: ${config.rtkcrvWorkDir}`);
+  const childProcess = spawn(rtkcrvExePath, ['-nc', '-o', configFile], {
+    detached: false,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: config.rtkcrvWorkDir,
+    windowsHide: true
+  });
+  const pid = childProcess.pid;
+  const startTime = new Date();
+  const logFileName = configFile.replace('.conf', '.log');
+  const logPath = path.join(config.generatedDir, logFileName);
+  const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+  logStream.write(`\n========== RTKRCV 启动 ==========\n`);
+  logStream.write(`时间: ${startTime.toISOString()}\n`);
+  logStream.write(`配置文件: ${configFile}\n`);
+  logStream.write(`进程 PID: ${pid}\n`);
+  logStream.write(`================================\n\n`);
+  childProcess.stdout.on('data', (data) => {
+    logStream.write(data);
+  });
+  childProcess.stderr.on('data', (data) => {
+    logStream.write(`[ERROR] ${data}`);
+  });
+  childProcess.on('exit', (code, signal) => {
+    const exitTime = new Date();
+    logStream.write(`\n========== RTKRCV 退出 ==========\n`);
+    logStream.write(`时间: ${exitTime.toISOString()}\n`);
+    logStream.write(`退出码: ${code}\n`);
+    logStream.write(`信号: ${signal}\n`);
+    logStream.write(`================================\n\n`);
+    logStream.end();
+    runningProcesses.delete(configFile);
+    log('info', `RTKRCV process exited: ${configFile} (PID: ${pid}, Code: ${code})`);
+  });
+  childProcess.on('error', (error) => {
+    logStream.write(`\n[FATAL ERROR] ${error.message}\n`);
+    logStream.end();
+    runningProcesses.delete(configFile);
+    log('error', `RTKRCV process error: ${configFile} - ${error.message}`);
+  });
+  runningProcesses.set(configFile, {
+    process: childProcess,
+    pid: pid,
+    startTime: startTime,
+    configFile: configFile,
+    logFile: logFileName,
+    logStream: logStream
+  });
+  log('info', `Started RTKRCV: ${configFile} (PID: ${pid})`);
+  return { pid, logFileName };
 }
 
 // 从路径中提取挂载点
@@ -580,6 +764,17 @@ function stopRtkcrvByStationId(stationId) {
       processInfo.process.kill();
       log('info', `🛑 Station ${stationId}: 已达到稳定，自动关闭 RTKRCV (PID: ${processInfo.pid})`);
       
+      // 若存在批量调度，释放并发槽并立即补位
+      try {
+        if (batchScheduler && batchScheduler.active && batchScheduler.running && batchScheduler.running.has(stationId)) {
+          batchScheduler.running.delete(stationId);
+          batchSchedulerFillSlots(null);
+          log('info', `Batch scheduler: freed slot by auto stop of station ${stationId}, filling next from queue`);
+        }
+      } catch (e) {
+        log('warn', `Batch scheduler update on auto stop failed: ${e.message}`);
+      }
+      
       // 推送关闭通知到前端
       broadcastToSSE({
         type: 'rtkrcv_auto_stopped',
@@ -929,36 +1124,13 @@ app.post('/api/generate-config', (req, res) => {
       });
     }
 
-    // 读取模板
-    let configContent = readTemplate();
-    
-    // 替换配置项
-    configContent = configContent.replace(/^inpstr1-path\s*=.*$/m, `inpstr1-path       =${inpstr1}`);
-    configContent = configContent.replace(/^inpstr2-path\s*=.*$/m, `inpstr2-path       =${inpstr2}`);
-    configContent = configContent.replace(/^inpstr3-path\s*=.*$/m, `inpstr3-path       =${inpstr3}`);
-    configContent = configContent.replace(/^out-height\s*=.*$/m, `out-height         =${outHeight}   # (0:ellipsoidal,1:geodetic)`);
-    
-    // 同时更新输出文件路径，使用挂载点命名
-    const mountPoint = extractMountPoint(inpstr1);
-    configContent = configContent.replace(/^outstr1-path\s*=.*$/m, `outstr1-path       =127.0.0.1:60000`);
-    configContent = configContent.replace(/^outstr2-path\s*=.*$/m, `outstr2-path       =127.0.0.1:60000`);
-    
-    // 生成文件名
-    const fileName = `${mountPoint}.conf`;
-    const filePath = path.join(config.generatedDir, fileName);
-    
-    // 确保 generated 目录存在
-    ensureDirectories();
-    
-    // 写入文件
-    fs.writeFileSync(filePath, configContent, 'utf-8');
-    log('info', `Generated config file: ${fileName}`);
-    
+    const { fileName, content } = generateConfigFile({ inpstr1, inpstr2, inpstr3, outHeight });
+ 
     res.json({ 
       success: true, 
       message: `配置文件已生成: ${fileName}`,
       fileName: fileName,
-      content: configContent
+      content: content
     });
     
   } catch (error) {
@@ -966,6 +1138,223 @@ app.post('/api/generate-config', (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: '生成配置文件时出错: ' + error.message 
+    });
+  }
+});
+
+// 批量调度状态
+app.get('/api/batch/status', (req, res) => {
+  try {
+    res.json({
+      success: true,
+      active: batchScheduler.active,
+      concurrency: batchScheduler.concurrency,
+      pending: batchScheduler.pending ? batchScheduler.pending.length : 0,
+      running: batchScheduler.running ? Array.from(batchScheduler.running) : [],
+      hasOptions: !!batchScheduler.options
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 取消批量调度：清空队列，可选停止正在运行
+app.post('/api/batch/cancel', (req, res) => {
+  try {
+    const { stopRunning } = req.body || {};
+    const wasActive = batchScheduler.active;
+    const queued = batchScheduler.pending ? batchScheduler.pending.length : 0;
+    const runningCount = batchScheduler.running ? batchScheduler.running.size : 0;
+    const stopped = [];
+    const stopErrors = [];
+    
+    // 关闭调度器并清空队列
+    batchScheduler.active = false;
+    batchScheduler.pending = [];
+    batchScheduler.options = null;
+    
+    // 可选：停止所有正在运行的进程
+    if (stopRunning && runningCount > 0) {
+      batchScheduler.running.forEach((stationId) => {
+        try {
+          const configFile = `${stationId}.conf`;
+          const info = runningProcesses.get(configFile);
+          if (info) {
+            // 推送手动停止通知到前端，便于前端立即清理卡片
+            broadcastToSSE({
+              type: 'rtkrcv_manual_stopped',
+              data: {
+                stationId: stationId,
+                configFile: configFile,
+                reason: 'batch_cancel',
+                message: `站点 ${stationId} 因批量中断被停止`
+              }
+            });
+            // 清理后端缓存，防止卡片重新出现
+            try { latestData.delete(stationId); } catch (e) {}
+            try { stationStability.delete(stationId); } catch (e) {}
+            try { ecefCache.delete(stationId); } catch (e) {}
+            info.process.kill();
+            stopped.push(stationId);
+          }
+        } catch (e) {
+          stopErrors.push({ stationId, error: e.message || String(e) });
+        }
+      });
+    }
+    
+    res.json({
+      success: true,
+      wasActive,
+      clearedQueued: queued,
+      runningBefore: runningCount,
+      stoppedRunning: stopped.length,
+      stopErrors
+    });
+  } catch (error) {
+    log('error', `Batch cancel error: ${error.message}`);
+    res.status(500).json({
+      success: false,
+      message: '取消批量失败: ' + error.message
+    });
+  }
+});
+
+// 批量：从TXT读取并并行（或限流并发）启动多个站点
+app.post('/api/batch/run-txt', (req, res) => {
+  try {
+    const { txtPath, txtContent, inpstr1Base, inpstr2, inpstr3, concurrency } = req.body || {};
+    
+    if ((!txtPath && !txtContent) || !inpstr1Base) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供 txtPath 或 txtContent，以及 inpstr1Base'
+      });
+    }
+    
+    // 若未提供 inpstr2/3，则从模板读取默认值
+    let tplInp2 = inpstr2;
+    let tplInp3 = inpstr3;
+    if (!tplInp2 || !tplInp3) {
+      const tpl = readTemplate();
+      if (!tplInp2) {
+        const m2 = tpl.match(/^inpstr2-path\s*=\s*(.+)$/m);
+        if (m2 && m2[1]) tplInp2 = m2[1].trim();
+      }
+      if (!tplInp3) {
+        const m3 = tpl.match(/^inpstr3-path\s*=\s*(.+)$/m);
+        if (m3 && m3[1]) tplInp3 = m3[1].trim();
+      }
+    }
+    
+    if (!tplInp2 || !tplInp3) {
+      return res.status(400).json({
+        success: false,
+        message: '无法确定 inpstr2 或 inpstr3，请在请求体中提供或在模板中配置'
+      });
+    }
+    
+    // 确定TXT来源：路径或内容
+    let list = [];
+    if (txtContent && typeof txtContent === 'string') {
+      // 将内容保存为临时文件，便于统一处理
+      ensureDirectories();
+      const tmpName = `stations_${Date.now()}.txt`;
+      const tmpPath = path.join(config.generatedDir, tmpName);
+      fs.writeFileSync(tmpPath, txtContent, 'utf-8');
+      log('info', `Saved uploaded TXT content to: ${tmpPath}`);
+      list = parseStationsTxt(tmpPath);
+    } else {
+      const resolved = path.isAbsolute(txtPath) ? txtPath : path.join(__dirname, txtPath);
+      list = parseStationsTxt(resolved);
+    }
+    if (list.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'TXT 中没有有效的站点数据（格式：stationId outHeight）'
+      });
+    }
+    
+    const base = ensureTrailingSlash(inpstr1Base);
+
+    // 如果提供了并发限制，则使用调度器
+    const conc = parseInt(concurrency, 10);
+    if (!Number.isNaN(conc) && conc > 0) {
+      // 初始化调度器
+      batchScheduler.active = true;
+      batchScheduler.concurrency = conc;
+      batchScheduler.pending = list.slice(); // 按顺序排队
+      batchScheduler.running = batchScheduler.running || new Set();
+      batchScheduler.options = {
+        inpstr1Base: base,
+        inpstr2: tplInp2,
+        inpstr3: tplInp3
+      };
+      const startedNow = [];
+      batchSchedulerFillSlots(startedNow);
+      const queuedCount = batchScheduler.pending.length;
+      
+      // 仅返回“本次立即启动”的结果，同时给出排队数量
+      const started = startedNow.filter(r => r.success).length;
+      const failed = startedNow.filter(r => !r.success).length;
+      return res.json({
+        success: true,
+        total: list.length,
+        started,
+        failed,
+        queued: queuedCount,
+        concurrency: batchScheduler.concurrency,
+        running: batchScheduler.running.size,
+        results: startedNow
+      });
+    } else {
+      // 原行为：全部立即启动（不做并发限制）
+      const results = [];
+      for (const item of list) {
+        try {
+          const stationId = item.stationId;
+          const outHeight = item.outHeight;
+          const inp1 = `${base}${stationId}`;
+          
+          const { fileName } = generateConfigFile({
+            inpstr1: inp1,
+            inpstr2: tplInp2,
+            inpstr3: tplInp3,
+            outHeight: outHeight
+          });
+          
+          const startInfo = startRtkrcvInternal(fileName);
+          
+          results.push({
+            stationId,
+            configFile: fileName,
+            pid: startInfo.pid,
+            logFile: startInfo.logFileName,
+            success: true
+          });
+        } catch (e) {
+          results.push({
+            stationId: item.stationId,
+            error: e.message || String(e),
+            success: false
+          });
+        }
+      }
+      const started = results.filter(r => r.success).length;
+      const failed = results.filter(r => !r.success).length;
+      return res.json({
+        success: true,
+        total: results.length,
+        started,
+        failed,
+        results
+      });
+    }
+  } catch (error) {
+    log('error', `Batch run error: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: '批量执行失败: ' + error.message
     });
   }
 });
@@ -1660,6 +2049,11 @@ app.post('/api/rtkrcv/start', (req, res) => {
       
       runningProcesses.delete(configFile);
       log('info', `RTKRCV process exited: ${configFile} (PID: ${pid}, Code: ${code})`);
+    // 调度器回调（根据配置文件名推导 stationId）
+    try {
+      const stationId = String(configFile).replace(/\.conf$/i, '');
+      batchSchedulerOnProcessExit(stationId);
+    } catch (e) {}
     });
     
     childProcess.on('error', (error) => {
@@ -1727,6 +2121,17 @@ app.post('/api/rtkrcv/stop', (req, res) => {
     processInfo.process.kill();
     
     log('info', `🛑 Manually stopped RTKRCV: ${configFile} (PID: ${processInfo.pid})`);
+
+    // 若存在批量调度，立即从调度器的running中移除并补位（exit回调也会再次尝试，但不会重复，因为此处已删除）
+    try {
+      if (batchScheduler && batchScheduler.active && batchScheduler.running && batchScheduler.running.has(stationId)) {
+        batchScheduler.running.delete(stationId);
+        batchSchedulerFillSlots(null);
+        log('info', `Batch scheduler: freed slot by manual stop of station ${stationId}, filling next from queue`);
+      }
+    } catch (e) {
+      log('warn', `Batch scheduler update on manual stop failed: ${e.message}`);
+    }
     
     // 推送停止通知到前端（让前端清除卡片和缓存）
     broadcastToSSE({

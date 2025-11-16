@@ -20,6 +20,19 @@ const processStatus = document.getElementById('processStatus');
 const realtimeData = document.getElementById('realtimeData');
 const connectionStatus = document.getElementById('connectionStatus');
 const dataCount = document.getElementById('dataCount');
+// 批量DOM
+const batchInpstr1Base = document.getElementById('batchInpstr1Base');
+const batchInpstr2 = document.getElementById('batchInpstr2');
+const batchInpstr3 = document.getElementById('batchInpstr3');
+const batchTxtFile = document.getElementById('batchTxtFile');
+const batchTxtText = document.getElementById('batchTxtText');
+const batchRunBtn = document.getElementById('batchRunBtn');
+const batchClearBtn = document.getElementById('batchClearBtn');
+const batchCancelBtn = document.getElementById('batchCancelBtn');
+const batchResults = document.getElementById('batchResults');
+const batchSummary = document.getElementById('batchSummary');
+const batchTableContainer = document.getElementById('batchTableContainer');
+const batchConcurrencyInput = document.getElementById('batchConcurrency');
 
 // SSE 连接
 let eventSource = null;
@@ -78,6 +91,15 @@ function setupEventListeners() {
     closePreviewBtn.addEventListener('click', () => {
         contentPreview.style.display = 'none';
     });
+
+    // 批量运行
+    if (batchRunBtn) batchRunBtn.addEventListener('click', handleBatchRun);
+    if (batchClearBtn) batchClearBtn.addEventListener('click', () => {
+        batchResults.style.display = 'none';
+        batchSummary.innerHTML = '';
+        batchTableContainer.innerHTML = '';
+    });
+    if (batchCancelBtn) batchCancelBtn.addEventListener('click', handleBatchCancel);
 }
 
 // 处理表单提交
@@ -135,6 +157,177 @@ async function handleFormSubmit(e) {
         submitBtn.innerHTML = originalText;
         submitBtn.disabled = false;
     }
+}
+
+// 中断批量（清空队列，可选停止正在运行）
+async function handleBatchCancel() {
+    try {
+        const stopRunning = confirm('是否同时停止正在运行的解算进程？\n确定=清空队列并停止正在运行，取消=仅清空队列');
+        const btn = batchCancelBtn;
+        const original = btn.innerHTML;
+        btn.innerHTML = '⏳ 处理中...';
+        btn.disabled = true;
+
+        const resp = await fetch(`${API_BASE_URL}/batch/cancel`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ stopRunning })
+        });
+        const result = await resp.json();
+        if (!result.success) {
+            showMessage(`❌ 中断失败：${result.message || '未知错误'}`, 'error');
+            return;
+        }
+        const msg = stopRunning
+            ? `✅ 已清空队列(${result.clearedQueued})，并停止 ${result.stoppedRunning}/${result.runningBefore} 个运行中的进程`
+            : `✅ 已清空队列(${result.clearedQueued})；正在运行的 ${result.runningBefore} 个将继续直至结束`;
+        showMessage(msg, 'success');
+
+        // 刷新进程列表
+        await loadProcessList();
+    } catch (e) {
+        console.error(e);
+        showMessage('❌ 中断失败，请检查网络与服务', 'error');
+    } finally {
+        batchCancelBtn.innerHTML = '⏹ 中断批量';
+        batchCancelBtn.disabled = false;
+    }
+}
+
+// 处理批量运行
+async function handleBatchRun() {
+    try {
+        const base = (batchInpstr1Base.value || '').trim();
+        if (!base) {
+            showMessage('❌ 请输入公共前缀 inpstr1Base', 'error');
+            return;
+        }
+
+        // 读取TXT内容：优先文件，其次文本域
+        let txtContent = (batchTxtText.value || '').trim();
+        const file = batchTxtFile.files && batchTxtFile.files[0];
+        if (file) {
+            txtContent = await readFileAsText(file);
+        }
+        if (!txtContent) {
+            showMessage('❌ 请上传TXT文件或粘贴TXT内容', 'error');
+            return;
+        }
+
+        // 构建请求体
+        const payload = {
+            txtContent,
+            inpstr1Base: base
+        };
+        const v2 = (batchInpstr2.value || '').trim();
+        const v3 = (batchInpstr3.value || '').trim();
+        if (v2) payload.inpstr2 = v2;
+        if (v3) payload.inpstr3 = v3;
+        const concVal = parseInt((batchConcurrencyInput && batchConcurrencyInput.value) || '5', 10);
+        if (!isNaN(concVal) && concVal > 0) payload.concurrency = concVal;
+
+        // 按钮loading
+        const original = batchRunBtn.innerHTML;
+        batchRunBtn.innerHTML = '⏳ 执行中...';
+        batchRunBtn.disabled = true;
+
+        const resp = await fetch(`${API_BASE_URL}/batch/run-txt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const result = await resp.json();
+
+        if (!result.success) {
+            showMessage(`❌ 执行失败：${result.message || '未知错误'}`, 'error');
+            return;
+        }
+
+        // 展示结果
+        renderBatchResults(result);
+        showMessage(`✅ 批量执行完成：成功 ${result.started}，失败 ${result.failed}`, 'success');
+        // 刷新进程列表
+        await loadProcessList();
+    } catch (e) {
+        console.error(e);
+        showMessage('❌ 执行失败，请检查网络与服务', 'error');
+    } finally {
+        batchRunBtn.innerHTML = '🚀 批量运行';
+        batchRunBtn.disabled = false;
+    }
+}
+
+function renderBatchResults(result) {
+    batchResults.style.display = 'block';
+    batchSummary.innerHTML = `
+        <div class="message message-info">
+            共 ${result.total} 个站点；本次立即启动 <strong>${result.started}</strong> 个，失败 <strong>${result.failed}</strong> 个${typeof result.queued === 'number' ? `，已排队 <strong>${result.queued}</strong> 个（并发=${result.concurrency || '-'}，当前运行=${result.running || 0}）` : ''}
+        </div>
+    `;
+
+    const rowsStarted = (result.results || []).map((r) => {
+        if (r.success) {
+            return `
+                <tr>
+                    <td><strong>${r.stationId}</strong></td>
+                    <td><span class="status-badge running">成功</span></td>
+                    <td>${r.pid || '-'}</td>
+                    <td>${r.configFile || '-'}</td>
+                    <td>${
+                        r.logFile
+                        ? `<a href="#" onclick="viewLog('${r.logFile}'); return false;">${r.logFile}</a>`
+                        : '-'
+                    }</td>
+                    <td>-</td>
+                </tr>
+            `;
+        } else {
+            return `
+                <tr>
+                    <td><strong>${r.stationId}</strong></td>
+                    <td><span class="status-badge stopped">失败</span></td>
+                    <td>-</td>
+                    <td>-</td>
+                    <td>-</td>
+                    <td style="color:#c0392b;">${(r.error || '').replace(/</g,'&lt;')}</td>
+                </tr>
+            `;
+        }
+    }).join('');
+
+    // 若有排队数量但没有逐项列表，则给出提示行
+    const rowsQueued = (typeof result.queued === 'number' && result.queued > 0)
+        ? `<tr><td colspan="6" style="color:#666;">其余 ${result.queued} 个站点已进入队列，达到稳定或进程退出后将自动补位启动</td></tr>`
+        : '';
+
+    batchTableContainer.innerHTML = `
+        <table class="results-table">
+            <thead>
+                <tr>
+                    <th>站点编号</th>
+                    <th>状态</th>
+                    <th>PID</th>
+                    <th>配置文件</th>
+                    <th>日志</th>
+                    <th>错误</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${rowsStarted}${rowsQueued}
+            </tbody>
+        </table>
+    `;
+
+    batchResults.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = reject;
+        reader.readAsText(file);
+    });
 }
 
 // 显示结果
@@ -1076,6 +1269,9 @@ function handleRtkcrvAutoStopped(data) {
     
     // 显示通知
     showMessage(`🛑 ${data.message}`, 'info');
+    
+    // 立即清除站点卡片与缓存，避免占位与视觉残留
+    clearStationCard(data.stationId);
     
     // 刷新进程列表
     loadProcessList();
