@@ -49,7 +49,7 @@ const config = {
 
   // 稳定性判定参数
   // 连续固定解累积秒数阈值（允许短暂掉固定不清零）
-  stabilityRequiredSeconds: parseFloat(process.env.STABILITY_REQUIRED_SECONDS || '40'),
+  stabilityRequiredSeconds: parseFloat(process.env.STABILITY_REQUIRED_SECONDS || '70'),
   // 允许的非固定连续秒数，超过则重置收集
   nonFixedToleranceSeconds: parseFloat(process.env.NON_FIXED_TOLERANCE_SECONDS || '5'),
   // 为避免时间戳异常导致跳变，限制单次样本计入的最大间隔（秒）

@@ -76,6 +76,266 @@ const batchScheduler = {
   cooldownUntil: 0  // timestamp ms，> now 表示冷却中
 };
 
+// 轮次管理（多轮计算与持久化恢复）
+const roundManager = {
+  enabled: false,
+  totalRounds: 0,
+  currentRound: 0,
+  intervalMs: 0,
+  nextRoundTimer: null,
+  nextRoundAt: 0, // timestamp ms
+  // 保存第一轮的原始完整列表（包含 outHeight），后续轮依据成功站点过滤得到下一轮列表
+  seedOriginalList: [], // [{ stationId, outHeight }]
+  // 上一轮成功的站点ID数组
+  lastRoundSuccesses: [],
+  // 运行参数（从第一轮继承）
+  options: null, // { inpstr1Base, inpstr2, inpstr3, concurrency }
+  // 当前轮正在运行的列表（用于中断恢复）
+  currentList: []
+};
+
+function roundStateFilePath() {
+  return path.join(config.generatedDir, 'round_state.json');
+}
+
+function writeRoundState() {
+  try {
+    ensureDirectories();
+    const file = roundStateFilePath();
+    const state = {
+      enabled: !!roundManager.enabled,
+      totalRounds: roundManager.totalRounds,
+      currentRound: roundManager.currentRound,
+      intervalMs: roundManager.intervalMs,
+      nextRoundAt: roundManager.nextRoundAt,
+      options: roundManager.options,
+      seedOriginalList: roundManager.seedOriginalList,
+      lastRoundSuccesses: roundManager.lastRoundSuccesses,
+      currentList: roundManager.currentList
+    };
+    fs.writeFileSync(file, JSON.stringify(state, null, 2), 'utf-8');
+  } catch (e) {
+    log('warn', `Write round state failed: ${e.message}`);
+  }
+}
+
+function readRoundState() {
+  try {
+    const file = roundStateFilePath();
+    if (!fs.existsSync(file)) return null;
+    const raw = fs.readFileSync(file, 'utf-8');
+    return JSON.parse(raw);
+  } catch (e) {
+    log('warn', `Read round state failed: ${e.message}`);
+    return null;
+  }
+}
+
+function clearRoundTimer() {
+  try {
+    if (roundManager.nextRoundTimer) {
+      clearTimeout(roundManager.nextRoundTimer);
+    }
+  } catch (_) {}
+  roundManager.nextRoundTimer = null;
+}
+
+function disableRounds() {
+  roundManager.enabled = false;
+  clearRoundTimer();
+  roundManager.nextRoundAt = 0;
+  writeRoundState();
+  log('info', 'Round manager disabled.');
+}
+
+function listFromSuccesses(successIds, originalList) {
+  const originalMap = new Map(originalList.map(x => [String(x.stationId), x]));
+  return (successIds || []).map(id => originalMap.get(String(id))).filter(Boolean);
+}
+
+function startBatchFromList(list, options, concurrency) {
+  // 初始化调度器，尽量与 /api/batch/run-txt 主路径保持一致
+  batchScheduler.active = true;
+  batchScheduler.concurrency = concurrency > 0 ? concurrency : 5;
+  batchScheduler.pending = list.slice(); // 按顺序排队
+  batchScheduler.running = new Map();
+  batchScheduler.successCount = 0;
+  batchScheduler.failCount = 0;
+  batchScheduler.completedCount = 0;
+  batchScheduler.cooldownUntil = 0;
+  batchScheduler.failures = [];
+  batchScheduler.successes = [];
+  batchScheduler.originalList = list.slice();
+  batchScheduler.options = {
+    inpstr1Base: ensureTrailingSlash(options.inpstr1Base),
+    inpstr2: options.inpstr2,
+    inpstr3: options.inpstr3
+  };
+  // 记录 last_batch 元信息，便于观察与恢复
+  try {
+    ensureDirectories();
+    const lastBatchMetaFile = path.join(config.generatedDir, 'last_batch.json');
+    const meta = {
+      startedAt: new Date().toISOString(),
+      options: { ...batchScheduler.options },
+      concurrency: batchScheduler.concurrency,
+      list: list.map(it => ({ stationId: it.stationId, outHeight: it.outHeight }))
+    };
+    fs.writeFileSync(lastBatchMetaFile, JSON.stringify(meta, null, 2), 'utf-8');
+  } catch (e) {
+    log('warn', `Failed to write last batch meta (round): ${e.message}`);
+  }
+  // 保存当前轮列表到 roundState，便于中断恢复
+  roundManager.currentList = list.map(it => ({ stationId: it.stationId, outHeight: it.outHeight }));
+  writeRoundState();
+  // 填充并启动
+  batchSchedulerFillSlots(null);
+}
+
+function scheduleNextRoundIfNeeded() {
+  if (!roundManager.enabled) return;
+  if (roundManager.currentRound >= roundManager.totalRounds) {
+    disableRounds();
+    return;
+  }
+  // 计算下一轮列表：上一轮成功的站点
+  const nextList = listFromSuccesses(roundManager.lastRoundSuccesses, roundManager.seedOriginalList);
+  if (!nextList.length) {
+    log('warn', 'Next round has no stations (no successes). Rounds will be disabled.');
+    disableRounds();
+    return;
+  }
+  const delay = roundManager.intervalMs > 0 ? roundManager.intervalMs : (20 * 60 * 1000);
+  roundManager.nextRoundAt = Date.now() + delay;
+  writeRoundState();
+  clearRoundTimer();
+  roundManager.nextRoundTimer = setTimeout(() => {
+    try {
+      roundManager.currentRound += 1;
+      const { options } = roundManager;
+      const conc = (options && options.concurrency) ? options.concurrency : 5;
+      log('info', `Starting round ${roundManager.currentRound}/${roundManager.totalRounds} with ${nextList.length} stations after wait.`);
+      startBatchFromList(nextList, options, conc);
+      writeRoundState();
+    } catch (e) {
+      log('error', `Failed to start next round: ${e.message}`);
+    }
+  }, delay);
+  log('info', `Scheduled next round ${roundManager.currentRound + 1} in ${Math.round(delay/60000)} minutes.`);
+}
+
+function onBatchCompleted() {
+  try {
+    // 广播当前轮完成，通知前端清理本轮站点
+    try {
+      const stationIds = (Array.isArray(roundManager.currentList) && roundManager.currentList.length > 0
+        ? roundManager.currentList
+        : (Array.isArray(batchScheduler.originalList) ? batchScheduler.originalList : []))
+        .map(x => (typeof x === 'string' ? x : x && x.stationId))
+        .filter(Boolean);
+      const successIds = Array.isArray(batchScheduler.successes) ? batchScheduler.successes.slice() : [];
+      const failIds = Array.isArray(batchScheduler.failures) ? batchScheduler.failures.slice() : [];
+      const round = roundManager.enabled ? (roundManager.currentRound || 1) : 1;
+      const totalRounds = roundManager.enabled ? (roundManager.totalRounds || 1) : 1;
+
+      // 服务器端也清理缓存，避免残留数据导致前端再次显示
+      try {
+        stationIds.forEach((sid) => {
+          try { latestData.delete(sid); } catch (_) {}
+          try { stationStability.delete(sid); } catch (_) {}
+          try { ecefCache.delete(sid); } catch (_) {}
+          try { sseLastSent.delete(sid); } catch (_) {}
+        });
+      } catch (_) {}
+
+      broadcastToSSE({
+        type: 'round_completed',
+        data: {
+          round,
+          totalRounds,
+          stationIds,
+          successIds,
+          failIds,
+          finishedAt: new Date().toISOString()
+        }
+      });
+    } catch (e) {
+      log('warn', `Broadcast round_completed failed: ${e.message}`);
+    }
+
+    // 更新轮次管理状态
+    if (roundManager.enabled) {
+      roundManager.lastRoundSuccesses = Array.isArray(batchScheduler.successes) ? batchScheduler.successes.slice() : [];
+      writeRoundState();
+      scheduleNextRoundIfNeeded();
+    }
+  } catch (e) {
+    log('warn', `onBatchCompleted error: ${e.message}`);
+  }
+}
+
+function resumeRoundsIfNeeded() {
+  try {
+    const state = readRoundState();
+    if (!state || !state.enabled) return;
+    // 恢复内存状态
+    roundManager.enabled = !!state.enabled;
+    roundManager.totalRounds = state.totalRounds || 0;
+    roundManager.currentRound = state.currentRound || 0;
+    roundManager.intervalMs = state.intervalMs || 20 * 60 * 1000;
+    roundManager.nextRoundAt = state.nextRoundAt || 0;
+    roundManager.options = state.options || null;
+    roundManager.seedOriginalList = Array.isArray(state.seedOriginalList) ? state.seedOriginalList : [];
+    roundManager.lastRoundSuccesses = Array.isArray(state.lastRoundSuccesses) ? state.lastRoundSuccesses : [];
+    roundManager.currentList = Array.isArray(state.currentList) ? state.currentList : [];
+
+    if (!roundManager.enabled) return;
+
+    // 若存在当前轮列表且未运行，则恢复当前轮
+    if (roundManager.currentList.length > 0 && !batchScheduler.active) {
+      const conc = (roundManager.options && roundManager.options.concurrency) ? roundManager.options.concurrency : 5;
+      log('info', `Resuming running round ${roundManager.currentRound}/${roundManager.totalRounds} with ${roundManager.currentList.length} stations...`);
+      startBatchFromList(roundManager.currentList, roundManager.options, conc);
+      return;
+    }
+
+    // 若等待下一轮
+    if (roundManager.currentRound < roundManager.totalRounds) {
+      const now = Date.now();
+      if (roundManager.nextRoundAt && roundManager.nextRoundAt > now) {
+        const delay = roundManager.nextRoundAt - now;
+        log('info', `Resuming scheduled next round in ${Math.round(delay/60000)} minutes...`);
+        clearRoundTimer();
+        roundManager.nextRoundTimer = setTimeout(() => {
+          try {
+            roundManager.currentRound += 1;
+            const nextList = listFromSuccesses(roundManager.lastRoundSuccesses, roundManager.seedOriginalList);
+            const conc = (roundManager.options && roundManager.options.concurrency) ? roundManager.options.concurrency : 5;
+            log('info', `Starting resumed round ${roundManager.currentRound}/${roundManager.totalRounds} with ${nextList.length} stations.`);
+            startBatchFromList(nextList, roundManager.options, conc);
+            writeRoundState();
+          } catch (e) {
+            log('error', `Failed to start resumed next round: ${e.message}`);
+          }
+        }, delay);
+      } else {
+        // 已到时间，立即开始下一轮
+        roundManager.currentRound += 1;
+        const nextList = listFromSuccesses(roundManager.lastRoundSuccesses, roundManager.seedOriginalList);
+        const conc = (roundManager.options && roundManager.options.concurrency) ? roundManager.options.concurrency : 5;
+        log('info', `Starting overdue next round ${roundManager.currentRound}/${roundManager.totalRounds} with ${nextList.length} stations.`);
+        startBatchFromList(nextList, roundManager.options, conc);
+        writeRoundState();
+      }
+    } else {
+      // 已完成所有轮次
+      disableRounds();
+    }
+  } catch (e) {
+    log('warn', `resumeRoundsIfNeeded failed: ${e.message}`);
+  }
+}
+
 function isInCooldown() {
   return batchScheduler.cooldownUntil && Date.now() < batchScheduler.cooldownUntil;
 }
@@ -202,6 +462,8 @@ function batchSchedulerFillSlots(startedNowCollector) {
   if (batchScheduler.pending.length === 0 && batchScheduler.running.size === 0) {
     batchScheduler.active = false;
     batchScheduler.options = null;
+    // 批量全部完成时触发钩子（用于多轮调度）
+    onBatchCompleted();
   }
 }
 
@@ -1644,6 +1906,9 @@ app.post('/api/batch/cancel', (req, res) => {
     const stopped = [];
     const stopErrors = [];
     
+    // 同时关闭多轮调度
+    disableRounds();
+    
     // 关闭调度器并清空队列
     batchScheduler.active = false;
     batchScheduler.pending = [];
@@ -1730,7 +1995,7 @@ app.post('/api/batch/cancel', (req, res) => {
 // 批量：从TXT读取并并行（或限流并发）启动多个站点
 app.post('/api/batch/run-txt', (req, res) => {
   try {
-    const { txtPath, txtContent, inpstr1Base, inpstr2, inpstr3, concurrency, skipFailed = true, skipSucceeded = true } = req.body || {};
+    const { txtPath, txtContent, inpstr1Base, inpstr2, inpstr3, concurrency, skipFailed = true, skipSucceeded = true, rounds, roundIntervalMinutes } = req.body || {};
     
     if ((!txtPath && !txtContent) || !inpstr1Base) {
       return res.status(400).json({
@@ -1804,7 +2069,7 @@ app.post('/api/batch/run-txt', (req, res) => {
       log('warn', `Filtering by history failed: ${e.message}`);
     }
     
-    // 记录本轮原始列表与元数据（便于中断后恢复与生成新列表）
+    // 记录本轮原始列表与元数据（便于中断后恢复与生成新列表，同时支持多轮调度）
     try {
       ensureDirectories();
       const lastBatchMetaFile = path.join(config.generatedDir, 'last_batch.json');
@@ -1820,6 +2085,32 @@ app.post('/api/batch/run-txt', (req, res) => {
       // 同时将本轮原始列表保存为文本（stationId outHeight）
       const originalTxt = originalList.map(x => `${x.stationId} ${x.outHeight}`).join('\n');
       fs.writeFileSync(path.join(config.generatedDir, 'last_batch_original.txt'), originalTxt, 'utf-8');
+
+      // 初始化轮次管理（若请求指定 rounds >= 2 则启用）
+      const roundsInt = parseInt(rounds, 10);
+      const intervalMinInt = parseInt(roundIntervalMinutes, 10);
+      if (!Number.isNaN(roundsInt) && roundsInt >= 2) {
+        clearRoundTimer();
+        roundManager.enabled = true;
+        roundManager.totalRounds = roundsInt;
+        roundManager.currentRound = 1;
+        roundManager.intervalMs = (!Number.isNaN(intervalMinInt) && intervalMinInt > 0 ? intervalMinInt : 20) * 60 * 1000;
+        roundManager.seedOriginalList = originalList.slice();
+        roundManager.lastRoundSuccesses = [];
+        roundManager.options = {
+          inpstr1Base: base,
+          inpstr2: tplInp2,
+          inpstr3: tplInp3,
+          concurrency: Number.isNaN(parseInt(concurrency, 10)) ? 5 : parseInt(concurrency, 10)
+        };
+        roundManager.currentList = originalList.slice();
+        roundManager.nextRoundAt = 0;
+        writeRoundState();
+        log('info', `Round manager enabled: rounds=${roundManager.totalRounds}, intervalMinutes=${Math.round(roundManager.intervalMs/60000)}`);
+      } else {
+        // 未启用多轮时，关闭轮次管理
+        disableRounds();
+      }
     } catch (e) {
       log('warn', `Failed to write last batch meta: ${e.message}`);
     }
@@ -2882,6 +3173,9 @@ function startServer() {
   try {
     // 确保必要的目录存在
     ensureDirectories();
+    
+    // 启动时尝试恢复多轮调度状态（若存在）
+    resumeRoundsIfNeeded();
     
     // 启动 TCP 服务器监听 RTKRCV 输出
     startTcpServer();

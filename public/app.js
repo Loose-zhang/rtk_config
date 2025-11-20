@@ -52,12 +52,13 @@ let configPage = 1;
 const configPageSize = 10;
 
 // 页面加载时初始化
-document.addEventListener('DOMContentLoaded', () => {
-    loadConfigList();
-    loadProcessList();
-    loadStableResults(); // 加载稳定结果历史记录
+document.addEventListener('DOMContentLoaded', async () => {
+    // 依次加载，确保在连接 SSE 前已同步稳定结果，避免刷新后旧站点再次出现
+    await loadConfigList();
+    await loadProcessList();
+    await loadStableResults(); // 加载稳定结果历史记录并先行隐藏已稳定站点
     setupEventListeners();
-    connectSSE(); // 连接实时数据流
+    connectSSE(); // 再连接实时数据流，避免竞态导致已稳定站点重新出现
     
     // 定期更新进程状态（每5秒）
     setInterval(() => {
@@ -1234,6 +1235,29 @@ function handleSSEMessage(message) {
         handleRtkcrvAutoStopped(message.data);
     } else if (message.type === 'rtkrcv_manual_stopped') {
         handleRtkcrvManualStopped(message.data);
+    } else if (message.type === 'round_completed') {
+        handleRoundCompleted(message.data);
+    }
+}
+
+// 处理轮次完成：清除本轮所有站点卡片与缓存
+function handleRoundCompleted(data) {
+    try {
+        const round = data && Number.isFinite(data.round) ? data.round : 1;
+        const totalRounds = data && Number.isFinite(data.totalRounds) ? data.totalRounds : 1;
+        const stationIds = Array.isArray(data && data.stationIds) ? data.stationIds : [];
+        const successIds = new Set(Array.isArray(data && data.successIds) ? data.successIds : []);
+        const failIds = new Set(Array.isArray(data && data.failIds) ? data.failIds : []);
+
+        // 清除卡片与本地缓存
+        stationIds.forEach((sid) => {
+            clearStationCard(String(sid));
+        });
+
+        renderRealtimeData();
+        showMessage(`✅ 轮次 ${round}/${totalRounds} 完成：已清除 ${stationIds.length} 个站点卡片（成功 ${successIds.size}，失败 ${failIds.size}）`, 'success');
+    } catch (e) {
+        console.warn('handleRoundCompleted error:', e);
     }
 }
 
