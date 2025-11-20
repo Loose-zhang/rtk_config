@@ -1409,7 +1409,7 @@ function renderRealtimeData() {
                     ` : ''}
                     ${isCollecting ? `
                         <span class="progress-info">
-                            ⏱️ ${data.stability.elapsed.toFixed(0)}s / 40s
+                            ⏱️ ${data.stability.elapsed.toFixed(0)}s / ${data.stability && data.stability.required ? data.stability.required : 40}s
                             ${data.stability.sampleCount ? `(${data.stability.sampleCount} 样本)` : ''}
                         </span>
                     ` : ''}
@@ -1714,6 +1714,32 @@ async function loadStableResults() {
         
         if (result.success) {
             stableResultsAll = Array.isArray(result.results) ? result.results : [];
+            
+            // 根据已存在的稳定结果，隐藏监控中的对应站点并防止其再次出现（除非重新启动采集）
+            try {
+                const stableIds = new Set(
+                    stableResultsAll
+                        .filter(r => r && r.stationId)
+                        .map(r => String(r.stationId))
+                );
+                
+                // 将这些站点加入已清除集合，并从实时数据中移除
+                stableIds.forEach((sid) => {
+                    // 标记为已清除，避免 SSE 新数据再次渲染
+                    clearedStations.add(sid);
+                    // 取消可能存在的清除定时器
+                    cancelCardClear(sid);
+                    // 从实时渲染数据中移除
+                    if (stationDataMap.has(sid)) {
+                        stationDataMap.delete(sid);
+                    }
+                });
+                // 立即刷新监控区 UI
+                renderRealtimeData();
+            } catch (e) {
+                console.warn('同步稳定结果到监控隐藏列表失败:', e);
+            }
+            
             // 若当前页超出范围，重置为第1页
             stableResultsPage = 1;
             renderStableResults();

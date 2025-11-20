@@ -1,0 +1,83 @@
+{
+  "startedAt": "2025-11-20T03:55:54.024Z",
+  "options": {
+    "inpstr1Base": "beidou:29832611@8.134.185.53:8001/",
+    "inpstr2": "cvmh12222:fyx74729@120.253.226.97:8001/RTCM33_GRCEJ",
+    "inpstr3": "Ming:@Zhang12345@ntrip.data.gnss.ga.gov.au:2101/BCEP00BKG0"
+  },
+  "concurrency": 5,
+  "list": [
+    {
+      "stationId": "6516457",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6516461",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6516476",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6516483",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6516494",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6522552",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6522553",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6522558",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6522594",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6525623",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6539837",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6541861",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6541864",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8516408",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8516415",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8516419",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8516421",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8516427",
+      "outHeight": 0
+    }
+  ]
+}

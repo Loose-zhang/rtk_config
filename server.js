@@ -6,6 +6,14 @@ const path = require('path');
 const { spawn } = require('child_process');
 const net = require('net');
 const config = require('./config');
+let mysql = null;
+let dbPool = null;
+try {
+  // 可选依赖：MySQL（建议安装 mysql2）
+  mysql = require('mysql2/promise');
+} catch (e) {
+  // 未安装 mysql2 时，仅记录日志
+}
 
 const app = express();
 
@@ -19,6 +27,25 @@ const tcpClients = new Map();
 
 // SSE 客户端管理 - 用于推送实时数据到网页
 const sseClients = new Map();
+// SSE 限频：记录各站点上次推送时间（用于降压前端刷新与网络IO）
+const sseLastSent = new Map();
+
+// 子进程优先级设置（尽力而为，平台相关）
+function applyChildPriority(childProcess) {
+  try {
+    const level = String(config.childProcessPriority || '').toLowerCase();
+    if (!childProcess || !childProcess.pid) return;
+    if (typeof process.setPriority !== 'function') return;
+    if (level === 'low') {
+      // nice 值越大优先级越低；在Windows上，由Node映射到 BELOW_NORMAL
+      process.setPriority(childProcess.pid, 10);
+    } else if (level === 'high') {
+      process.setPriority(childProcess.pid, -5);
+    } // normal: 不处理
+  } catch (e) {
+    log('warn', `applyChildPriority failed: ${e.message}`);
+  }
+}
 
 // 最新的 RTKRCV 数据缓存
 const latestData = new Map();
@@ -35,12 +62,76 @@ const batchScheduler = {
   active: false,
   concurrency: 5,
   pending: [],
-  running: new Set(),
-  options: null // { inpstr1Base, inpstr2, inpstr3 }
+  // 运行中的站点：Map<stationId, { startMs:number, timeoutTimer:NodeJS.Timeout }>
+  running: new Map(),
+  options: null, // { inpstr1Base, inpstr2, inpstr3 }
+  // 统计
+  successCount: 0,
+  failCount: 0,
+  completedCount: 0,
+  failures: [], // 记录失败的站点编号（按完成顺序附加）
+  successes: [], // 记录本轮成功的站点编号
+  originalList: [], // 记录本轮输入的完整列表（含 stationId 与 outHeight）
+  // 冷却控制：完成每 15 个之后休眠 5 分钟
+  cooldownUntil: 0  // timestamp ms，> now 表示冷却中
 };
+
+function isInCooldown() {
+  return batchScheduler.cooldownUntil && Date.now() < batchScheduler.cooldownUntil;
+}
+
+function scheduleCooldownIfNeeded() {
+  if (batchScheduler.completedCount > 0 && batchScheduler.completedCount % 15 === 0) {
+    const pauseMs = 5 * 60 * 1000;
+    batchScheduler.cooldownUntil = Date.now() + pauseMs;
+    log('info', `Batch scheduler: completed ${batchScheduler.completedCount}, entering cooldown for 5 minutes`);
+    setTimeout(() => {
+      log('info', 'Batch scheduler: cooldown finished, resuming');
+      // 结束冷却后尝试补位
+      batchSchedulerFillSlots(null);
+    }, pauseMs);
+  }
+}
+
+function batchMarkComplete(stationId, success) {
+  try {
+    const meta = batchScheduler.running.get(stationId);
+    if (meta && meta.timeoutTimer) {
+      clearTimeout(meta.timeoutTimer);
+    }
+    batchScheduler.running.delete(stationId);
+    if (success) {
+      batchScheduler.successCount += 1;
+      try {
+        if (!batchScheduler.successes.includes(stationId)) {
+          batchScheduler.successes.push(stationId);
+        }
+      } catch (e) {}
+    } else {
+      batchScheduler.failCount += 1;
+      try {
+        batchScheduler.failures.push(stationId);
+        // 同步持久化失败站点列表
+        const existing = readFailedResults();
+        existing.push(stationId);
+        // 轻度去重，避免同站重复多次
+        const unique = Array.from(new Set(existing));
+        writeFailedResults(unique);
+      } catch (e) {}
+    }
+    batchScheduler.completedCount += 1;
+    scheduleCooldownIfNeeded();
+  } catch (e) {
+    log('warn', `batchMarkComplete error: ${e.message}`);
+  }
+}
 
 function batchSchedulerFillSlots(startedNowCollector) {
   if (!batchScheduler.active) return;
+  if (isInCooldown()) {
+    // 冷却中不启动新任务
+    return;
+  }
   while (batchScheduler.running.size < batchScheduler.concurrency && batchScheduler.pending.length > 0) {
     const item = batchScheduler.pending.shift();
     const stationId = item.stationId;
@@ -53,7 +144,40 @@ function batchSchedulerFillSlots(startedNowCollector) {
         outHeight: item.outHeight
       });
       const startInfo = startRtkrcvInternal(fileName);
-      batchScheduler.running.add(stationId);
+      // 设置30分钟未固定超时逻辑
+      const timeoutTimer = setTimeout(() => {
+        try {
+          // 若还在运行，则标记失败并杀进程
+          if (batchScheduler.running.has(stationId)) {
+            log('warn', `Batch scheduler: station ${stationId} timeout (30min) without fixed, marking as failed`);
+            // 推送通知与清理
+            const configFile = `${stationId}.conf`;
+            const proc = runningProcesses.get(configFile);
+            if (proc) {
+              broadcastToSSE({
+                type: 'rtkrcv_manual_stopped',
+                data: {
+                  stationId,
+                  configFile,
+                  reason: 'timeout',
+                  message: `站点 ${stationId} 超过30分钟未固定，已标记失败并停止`
+                }
+              });
+              try { latestData.delete(stationId); } catch (e) {}
+              try { stationStability.delete(stationId); } catch (e) {}
+              try { ecefCache.delete(stationId); } catch (e) {}
+              try { sseLastSent.delete(stationId); } catch (e) {}
+              proc.process.kill();
+            }
+            // 统计失败并尝试补位（exit 回调也会执行，再次补位不会重复，因为running已在 batchMarkComplete 中删除）
+            batchMarkComplete(stationId, false);
+            batchSchedulerFillSlots(null);
+          }
+        } catch (e) {
+          log('error', `Timeout handling error for ${stationId}: ${e.message}`);
+        }
+      }, 30 * 60 * 1000);
+      batchScheduler.running.set(stationId, { startMs: Date.now(), timeoutTimer });
       if (startedNowCollector) {
         startedNowCollector.push({
           stationId,
@@ -71,6 +195,8 @@ function batchSchedulerFillSlots(startedNowCollector) {
           success: false
         });
       }
+      // 启动失败也算完成一个，进入失败统计
+      batchMarkComplete(stationId, false);
     }
   }
   if (batchScheduler.pending.length === 0 && batchScheduler.running.size === 0) {
@@ -82,8 +208,8 @@ function batchSchedulerFillSlots(startedNowCollector) {
 function batchSchedulerOnProcessExit(stationId) {
   if (!batchScheduler.active) return;
   if (batchScheduler.running.has(stationId)) {
-    batchScheduler.running.delete(stationId);
-    // 尝试继续填充新的任务
+    // 未明确标记成功/失败时，按失败处理（通常 stable 时会先在 stop 回调中标记成功）
+    batchMarkComplete(stationId, false);
     batchSchedulerFillSlots(null);
   }
 }
@@ -107,6 +233,114 @@ function log(level, message) {
   }
 }
 
+// MySQL 初始化与访问封装
+async function dbInitMySql() {
+  try {
+    if (!mysql || !config.mysql || !config.mysql.host) {
+      log('warn', 'MySQL not configured. Database features are disabled. Configure config.mysql and install mysql2.');
+      return;
+    }
+    const { host, user, password, database, port } = config.mysql;
+    // 若目标数据库不存在，先以“无数据库”连接创建之
+    try {
+      const bootstrap = await mysql.createConnection({
+        host,
+        user,
+        password,
+        port: port || 3306
+      });
+      await bootstrap.execute(`CREATE DATABASE IF NOT EXISTS \`${database}\` CHARACTER SET utf8mb4`);
+      await bootstrap.end();
+      log('info', `Ensured database exists: ${database}`);
+    } catch (e) {
+      log('warn', `Ensure database failed (may already exist or no privilege): ${e.message}`);
+    }
+    dbPool = await mysql.createPool({
+      host,
+      user,
+      password,
+      database,
+      port: port || 3306,
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0,
+      charset: 'utf8mb4'
+    });
+    // 创建仅用于平均后稳定结果的表
+    await dbPool.execute(`
+      CREATE TABLE IF NOT EXISTS stable_results (
+        id VARCHAR(128) PRIMARY KEY,
+        station_id VARCHAR(128) NOT NULL,
+        timestamp VARCHAR(32) NOT NULL,
+        ecef_x DOUBLE NOT NULL,
+        ecef_y DOUBLE NOT NULL,
+        ecef_z DOUBLE NOT NULL,
+        lat DOUBLE NOT NULL,
+        lon DOUBLE NOT NULL,
+        height DOUBLE NOT NULL
+      )
+    `);
+    // 创建索引（老版本 MySQL 不支持 IF NOT EXISTS，这里忽略重复索引错误）
+    try {
+      await dbPool.execute(`CREATE INDEX idx_results_station ON stable_results(station_id)`);
+    } catch (e) {
+      if (e && e.code === 'ER_DUP_KEYNAME') {
+        // 索引已存在，忽略
+      } else {
+        log('warn', `Create index on stable_results failed: ${e.message}`);
+      }
+    }
+    log('info', `MySQL initialized: ${user}@${host}/${database}`);
+  } catch (e) {
+    log('error', `dbInitMySql failed: ${e.message}`);
+  }
+}
+
+function dbInsertStableResult(record) {
+  try {
+    if (!dbPool || !record || !record.id) return;
+    const sql = `
+      INSERT INTO stable_results (id, station_id, timestamp, ecef_x, ecef_y, ecef_z, lat, lon, height)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        station_id = VALUES(station_id),
+        timestamp = VALUES(timestamp),
+        ecef_x = VALUES(ecef_x),
+        ecef_y = VALUES(ecef_y),
+        ecef_z = VALUES(ecef_z),
+        lat = VALUES(lat),
+        lon = VALUES(lon),
+        height = VALUES(height)
+    `;
+    const params = [
+      record.id,
+      record.stationId,
+      record.timestamp,
+      parseFloat(record.ecef_x),
+      parseFloat(record.ecef_y),
+      parseFloat(record.ecef_z),
+      parseFloat(record.lat),
+      parseFloat(record.lon),
+      parseFloat(record.height)
+    ];
+    dbPool.execute(sql, params).catch(err => log('warn', `dbInsertStableResult error: ${err.message}`));
+  } catch (e) {
+    log('warn', `dbInsertStableResult failed: ${e.message}`);
+  }
+}
+
+// 启动时初始化 MySQL（异步）
+setImmediate(() => {
+  try {
+    const p = dbInitMySql();
+    if (p && typeof p.then === 'function') {
+      p.then(() => {}).catch(e => log('error', `dbInitMySql init error: ${e.message}`));
+    }
+  } catch (e) {
+    log('error', `dbInitMySql schedule error: ${e.message}`);
+  }
+});
+
 // 确保必要的目录存在
 function ensureDirectories() {
   if (!fs.existsSync(config.generatedDir)) {
@@ -117,6 +351,8 @@ function ensureDirectories() {
 
 // 稳定结果数据文件路径
 const stableResultsFile = path.join(config.generatedDir, 'stable_results.json');
+// 失败结果数据文件路径（仅记录站点编号列表）
+const failedResultsFile = path.join(config.generatedDir, 'failed_results.json');
 
 // 读取稳定结果
 function readStableResults() {
@@ -141,6 +377,35 @@ function writeStableResults(results) {
     return true;
   } catch (error) {
     log('error', `Error writing stable results: ${error.message}`);
+    return false;
+  }
+}
+
+// 读取失败结果（站点编号列表）
+function readFailedResults() {
+  try {
+    if (fs.existsSync(failedResultsFile)) {
+      const data = fs.readFileSync(failedResultsFile, 'utf-8');
+      const parsed = JSON.parse(data);
+      return Array.isArray(parsed) ? parsed : [];
+    }
+    return [];
+  } catch (error) {
+    log('error', `Error reading failed results: ${error.message}`);
+    return [];
+  }
+}
+
+// 写入失败结果（站点编号列表）
+function writeFailedResults(list) {
+  try {
+    ensureDirectories();
+    const arr = Array.isArray(list) ? list : [];
+    fs.writeFileSync(failedResultsFile, JSON.stringify(arr, null, 2), 'utf-8');
+    log('info', `Saved ${arr.length} failed results`);
+    return true;
+  } catch (error) {
+    log('error', `Error writing failed results: ${error.message}`);
     return false;
   }
 }
@@ -239,6 +504,8 @@ function startRtkrcvInternal(configFile) {
     cwd: config.rtkcrvWorkDir,
     windowsHide: true
   });
+  // 降低子进程优先级，减少CPU争用
+  applyChildPriority(childProcess);
   const pid = childProcess.pid;
   const startTime = new Date();
   const logFileName = configFile.replace('.conf', '.log');
@@ -639,7 +906,8 @@ function startTcpServer() {
                 stable: stabilityCheck.stable,
                 collecting: stabilityCheck.collecting || false,
                 elapsed: stabilityCheck.elapsed || 0,
-                sampleCount: stabilityCheck.sampleCount || 0
+                sampleCount: stabilityCheck.sampleCount || 0,
+                required: config.stabilityRequiredSeconds
               };
               
               // 如果已稳定，添加平均值
@@ -680,7 +948,8 @@ function startTcpServer() {
                 stable: stabilityCheck.stable,
                 collecting: stabilityCheck.collecting || false,
                 elapsed: stabilityCheck.elapsed || 0,
-                sampleCount: stabilityCheck.sampleCount || 0
+                sampleCount: stabilityCheck.sampleCount || 0,
+                required: config.stabilityRequiredSeconds
               };
               
               if (stabilityCheck.stable && stabilityCheck.average) {
@@ -742,6 +1011,21 @@ function startTcpServer() {
 
 // 广播消息到所有 SSE 客户端
 function broadcastToSSE(message) {
+  // 对 rtkrcv_data 做按站点的最小间隔限频
+  if (message && message.type === 'rtkrcv_data' && message.data && message.data.stationId) {
+    try {
+      const stationId = message.data.stationId;
+      const now = Date.now();
+      const last = sseLastSent.get(stationId) || 0;
+      const minGap = Number.isFinite(config.sseMinIntervalMs) ? config.sseMinIntervalMs : 0;
+      if (now - last < minGap) {
+        return;
+      }
+      sseLastSent.set(stationId, now);
+    } catch (e) {
+      // 忽略限频异常，保证功能不受影响
+    }
+  }
   const data = `data: ${JSON.stringify(message)}\n\n`;
   sseClients.forEach((client, id) => {
     try {
@@ -764,12 +1048,12 @@ function stopRtkcrvByStationId(stationId) {
       processInfo.process.kill();
       log('info', `🛑 Station ${stationId}: 已达到稳定，自动关闭 RTKRCV (PID: ${processInfo.pid})`);
       
-      // 若存在批量调度，释放并发槽并立即补位
+      // 若存在批量调度，标记成功并释放并发槽，随后立即补位
       try {
         if (batchScheduler && batchScheduler.active && batchScheduler.running && batchScheduler.running.has(stationId)) {
-          batchScheduler.running.delete(stationId);
+          batchMarkComplete(stationId, true);
           batchSchedulerFillSlots(null);
-          log('info', `Batch scheduler: freed slot by auto stop of station ${stationId}, filling next from queue`);
+          log('info', `Batch scheduler: success completed ${stationId}, filling next from queue`);
         }
       } catch (e) {
         log('warn', `Batch scheduler update on auto stop failed: ${e.message}`);
@@ -785,6 +1069,12 @@ function stopRtkcrvByStationId(stationId) {
           message: `站点 ${stationId} 已达到稳定状态，RTKRCV 已自动关闭`
         }
       });
+      
+      // 清理后端缓存，防止数据监控页面保留已完成的站点
+      try { latestData.delete(stationId); } catch (e) {}
+      try { stationStability.delete(stationId); } catch (e) {}
+      try { ecefCache.delete(stationId); } catch (e) {}
+      try { sseLastSent.delete(stationId); } catch (e) {}
       
       return true;
     } catch (error) {
@@ -850,6 +1140,10 @@ function checkStationStability(stationId, data) {
       timestamp: new Date(data.timestamp),
       satellites: data.quality.satellites
     });
+    // 内存上限：超过最大样本数则丢弃最早样本
+    if (Array.isArray(stability.samples) && stability.samples.length > (config.maxSamplesPerStation || 120)) {
+      stability.samples.shift();
+    }
     stability.accumulatedFixedSeconds += deltaSeconds || 1; // 首个样本按1秒计
     stability.nonFixedStreakSeconds = 0;
   } else {
@@ -874,6 +1168,44 @@ function checkStationStability(stationId, data) {
 
       log('info', `✅ Station ${stationId}: 达到稳定状态（容错）。累计固定 ${stability.accumulatedFixedSeconds.toFixed(1)}s，样本数: ${stability.samples.length}`);
 
+      // 自动保存稳定结果（防止中断后丢失）
+      try {
+        const results = readStableResults();
+        const nowIso = new Date().toISOString();
+        const record = {
+          id: `${stationId}_${Date.now()}`,
+          stationId: stationId,
+          timestamp: nowIso,
+          ecef_x: String(average.ecef.x),
+          ecef_y: String(average.ecef.y),
+          ecef_z: String(average.ecef.z),
+          lat: String(average.llh.lat),
+          lon: String(average.llh.lon),
+          height: String(average.llh.height),
+          // 扩展字段：用于前端展示样本数与是否过滤
+          sampleCount: Number(average.sampleCount || 0),
+          filtered: !!average.filtered,
+          removedSampleCount: Number(average.removedSampleCount || 0)
+        };
+        // 简单去重：若最近已有同站点且时间差<60秒，则跳过
+        const nowMs = Date.now();
+        const duplicate = results.some(r => r.stationId === stationId && Math.abs(nowMs - new Date(r.timestamp || nowIso).getTime()) < 60000);
+        if (!duplicate) {
+          results.unshift(record);
+          writeStableResults(results);
+          // 数据库：写入稳定结果
+          try { dbInsertStableResult(record); } catch (e3) {}
+          // 追加至成功列表文本（便于下一次计算使用）
+          try {
+            ensureDirectories();
+            const successTxtPath = path.join(config.generatedDir, 'last_success.txt');
+            fs.appendFileSync(successTxtPath, `${stationId}\n`);
+          } catch (e2) {}
+        }
+      } catch (e) {
+        log('warn', `Auto-save stable result failed for ${stationId}: ${e.message}`);
+      }
+
       broadcastToSSE({
         type: 'station_stable',
         data: {
@@ -885,6 +1217,11 @@ function checkStationStability(stationId, data) {
           endTime: stability.endTime.toISOString()
         }
       });
+
+      // 达到稳定后，根据配置释放样本以降低内存
+      if (!config.keepSamplesAfterStable) {
+        stability.samples = [];
+      }
 
       setTimeout(() => {
         stopRtkcrvByStationId(stationId);
@@ -1077,6 +1414,10 @@ function calculateStdDev(samples, mean) {
 // 写入数据流日志（合并到进程日志）
 function writeDataLog(parsedData, rawData) {
   try {
+    // 仅在固定解(q === 1)时写入TCP数据流日志
+    if (!parsedData || !parsedData.quality || parsedData.quality.status !== 1) {
+      return;
+    }
     const stationId = parsedData.stationId;
     const configFile = `${stationId}.conf`;
     
@@ -1085,10 +1426,12 @@ function writeDataLog(parsedData, rawData) {
     
     if (processInfo && processInfo.logStream) {
       // 格式化日志内容
-      const logEntry = `\n[TCP数据流] ${parsedData.dateTime} - ${parsedData.quality.statusText} (${parsedData.quality.satellites}颗卫星)\n` +
-                       `  ECEF: X=${parsedData.ecef.x} Y=${parsedData.ecef.y} Z=${parsedData.ecef.z}\n` +
-                       `  LLH:  Lat=${parsedData.llh.lat}° Lon=${parsedData.llh.lon}° H=${parsedData.llh.height}m\n` +
-                       `  原始数据:\n${rawData}\n`;
+      let logEntry = `\n[TCP数据流] ${parsedData.dateTime} - ${parsedData.quality.statusText} (${parsedData.quality.satellites}颗卫星)\n` +
+                     `  ECEF: X=${parsedData.ecef.x} Y=${parsedData.ecef.y} Z=${parsedData.ecef.z}\n` +
+                     `  LLH:  Lat=${parsedData.llh.lat}° Lon=${parsedData.llh.lon}° H=${parsedData.llh.height}m\n`;
+      if (config.enableRawDataLog) {
+        logEntry += `  原始数据:\n${rawData}\n`;
+      }
       
       processInfo.logStream.write(logEntry);
     } else {
@@ -1097,10 +1440,12 @@ function writeDataLog(parsedData, rawData) {
       const logPath = path.join(config.generatedDir, logFileName);
       
       if (fs.existsSync(logPath)) {
-        const logEntry = `\n[TCP数据流] ${parsedData.dateTime} - ${parsedData.quality.statusText} (${parsedData.quality.satellites}颗卫星)\n` +
-                         `  ECEF: X=${parsedData.ecef.x} Y=${parsedData.ecef.y} Z=${parsedData.ecef.z}\n` +
-                         `  LLH:  Lat=${parsedData.llh.lat}° Lon=${parsedData.llh.lon}° H=${parsedData.llh.height}m\n` +
-                         `  原始数据:\n${rawData}\n`;
+        let logEntry = `\n[TCP数据流] ${parsedData.dateTime} - ${parsedData.quality.statusText} (${parsedData.quality.satellites}颗卫星)\n` +
+                       `  ECEF: X=${parsedData.ecef.x} Y=${parsedData.ecef.y} Z=${parsedData.ecef.z}\n` +
+                       `  LLH:  Lat=${parsedData.llh.lat}° Lon=${parsedData.llh.lon}° H=${parsedData.llh.height}m\n`;
+        if (config.enableRawDataLog) {
+          logEntry += `  原始数据:\n${rawData}\n`;
+        }
         
         fs.appendFileSync(logPath, logEntry);
       }
@@ -1142,6 +1487,115 @@ app.post('/api/generate-config', (req, res) => {
   }
 });
 
+// 批量摘要：输出成功/失败/剩余列表并返回
+app.get('/api/batch/summary', (req, res) => {
+  try {
+    ensureDirectories();
+    const lastBatchMetaFile = path.join(config.generatedDir, 'last_batch.json');
+    let original = [];
+    if (fs.existsSync(lastBatchMetaFile)) {
+      const meta = JSON.parse(fs.readFileSync(lastBatchMetaFile, 'utf-8'));
+      original = Array.isArray(meta.list) ? meta.list : [];
+    } else {
+      original = Array.isArray(batchScheduler.originalList) ? batchScheduler.originalList : [];
+    }
+    const successes = Array.isArray(batchScheduler.successes) && batchScheduler.successes.length > 0
+      ? batchScheduler.successes.slice()
+      : Array.from(new Set(readStableResults().map(r => r.stationId))); // 退化：用已保存稳定结果近似成功集
+    const failures = readFailedResults();
+    const successSet = new Set(successes);
+    const failSet = new Set(failures);
+    const remaining = original.filter(x => !successSet.has(x.stationId) && !failSet.has(x.stationId));
+    
+    const toTxt = (arr) => arr.map(x => typeof x === 'string' ? x : `${x.stationId}${x.outHeight !== undefined ? ' ' + x.outHeight : ''}`).join('\n');
+    fs.writeFileSync(path.join(config.generatedDir, 'last_success.txt'), toTxt(successes), 'utf-8');
+    fs.writeFileSync(path.join(config.generatedDir, 'last_failed.txt'), toTxt(failures), 'utf-8');
+    fs.writeFileSync(path.join(config.generatedDir, 'last_remaining.txt'), toTxt(remaining), 'utf-8');
+    
+    res.json({
+      success: true,
+      counts: {
+        original: original.length,
+        successes: Array.isArray(successes) ? successes.length : 0,
+        failures: failures.length,
+        remaining: remaining.length
+      },
+      files: {
+        successTxt: 'last_success.txt',
+        failedTxt: 'last_failed.txt',
+        remainingTxt: 'last_remaining.txt'
+      }
+    });
+  } catch (error) {
+    log('error', `Batch summary error: ${error.message}`);
+    res.status(500).json({
+      success: false,
+      message: '获取批量摘要失败: ' + error.message
+    });
+  }
+});
+
+// 继续上次未完成的批量：使用 last_batch.json 生成“剩余列表”并重新启动调度
+app.post('/api/batch/resume', (req, res) => {
+  try {
+    const { concurrency } = req.body || {};
+    if (batchScheduler.active) {
+      return res.status(400).json({ success: false, message: '批量已在运行，无法继续' });
+    }
+    ensureDirectories();
+    const lastBatchMetaFile = path.join(config.generatedDir, 'last_batch.json');
+    if (!fs.existsSync(lastBatchMetaFile)) {
+      return res.status(404).json({ success: false, message: '未找到上次批量的元数据' });
+    }
+    const meta = JSON.parse(fs.readFileSync(lastBatchMetaFile, 'utf-8'));
+    const original = Array.isArray(meta.list) ? meta.list : [];
+    const failures = new Set(readFailedResults());
+    const successes = new Set(readStableResults().map(r => r.stationId));
+    const remaining = original.filter(x => !failures.has(x.stationId) && !successes.has(x.stationId));
+    if (remaining.length === 0) {
+      return res.json({ success: true, message: '没有待处理的站点', remaining: 0 });
+    }
+    // 初始化调度器
+    const conc = parseInt(concurrency, 10);
+    const realConc = (!Number.isNaN(conc) && conc > 0) ? conc : (Number.isInteger(meta.concurrency) && meta.concurrency > 0 ? meta.concurrency : 5);
+    batchScheduler.active = true;
+    batchScheduler.concurrency = realConc;
+    batchScheduler.pending = remaining.slice();
+    batchScheduler.running = new Map();
+    batchScheduler.successCount = 0;
+    batchScheduler.failCount = 0;
+    batchScheduler.completedCount = 0;
+    batchScheduler.cooldownUntil = 0;
+    batchScheduler.failures = [];
+    batchScheduler.successes = [];
+    batchScheduler.originalList = remaining.slice();
+    writeFailedResults([]); // 新一轮失败列表重新计
+    batchScheduler.options = {
+      inpstr1Base: meta.options.inpstr1Base,
+      inpstr2: meta.options.inpstr2,
+      inpstr3: meta.options.inpstr3
+    };
+    const startedNow = [];
+    batchSchedulerFillSlots(startedNow);
+    res.json({
+      success: true,
+      total: remaining.length,
+      started: startedNow.filter(r => r.success).length,
+      failed: startedNow.filter(r => !r.success).length,
+      queued: batchScheduler.pending.length,
+      concurrency: batchScheduler.concurrency,
+      running: batchScheduler.running.size,
+      results: startedNow
+    });
+  } catch (error) {
+    log('error', `Batch resume error: ${error.message}`);
+    res.status(500).json({
+      success: false,
+      message: '继续批量失败: ' + error.message
+    });
+  }
+});
+
 // 批量调度状态
 app.get('/api/batch/status', (req, res) => {
   try {
@@ -1150,8 +1604,30 @@ app.get('/api/batch/status', (req, res) => {
       active: batchScheduler.active,
       concurrency: batchScheduler.concurrency,
       pending: batchScheduler.pending ? batchScheduler.pending.length : 0,
-      running: batchScheduler.running ? Array.from(batchScheduler.running) : [],
-      hasOptions: !!batchScheduler.options
+      running: batchScheduler.running ? Array.from(batchScheduler.running.keys()) : [],
+      hasOptions: !!batchScheduler.options,
+      successCount: batchScheduler.successCount || 0,
+      failCount: batchScheduler.failCount || 0,
+      completedCount: batchScheduler.completedCount || 0,
+      cooldownRemainingSeconds: Math.max(0, Math.ceil((batchScheduler.cooldownUntil - Date.now()) / 1000))
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 获取失败的站点编号列表
+app.get('/api/batch/failures', (req, res) => {
+  try {
+    // 以文件为准，若文件不可用则回退到内存
+    let failures = readFailedResults();
+    if (!Array.isArray(failures) || failures.length === 0) {
+      failures = Array.isArray(batchScheduler.failures) ? batchScheduler.failures.slice() : [];
+    }
+    res.json({
+      success: true,
+      count: failures.length,
+      failures: failures
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1172,10 +1648,12 @@ app.post('/api/batch/cancel', (req, res) => {
     batchScheduler.active = false;
     batchScheduler.pending = [];
     batchScheduler.options = null;
+    batchScheduler.cooldownUntil = 0;
+    // 不清空历史失败：保留给用户查询
     
     // 可选：停止所有正在运行的进程
     if (stopRunning && runningCount > 0) {
-      batchScheduler.running.forEach((stationId) => {
+      batchScheduler.running.forEach((meta, stationId) => {
         try {
           const configFile = `${stationId}.conf`;
           const info = runningProcesses.get(configFile);
@@ -1194,6 +1672,7 @@ app.post('/api/batch/cancel', (req, res) => {
             try { latestData.delete(stationId); } catch (e) {}
             try { stationStability.delete(stationId); } catch (e) {}
             try { ecefCache.delete(stationId); } catch (e) {}
+            try { sseLastSent.delete(stationId); } catch (e) {}
             info.process.kill();
             stopped.push(stationId);
           }
@@ -1203,13 +1682,41 @@ app.post('/api/batch/cancel', (req, res) => {
       });
     }
     
+    // 生成本轮运行摘要列表文件（成功/失败/剩余），便于下一次计算
+    try {
+      ensureDirectories();
+      const lastBatchMetaFile = path.join(config.generatedDir, 'last_batch.json');
+      let original = [];
+      if (fs.existsSync(lastBatchMetaFile)) {
+        const meta = JSON.parse(fs.readFileSync(lastBatchMetaFile, 'utf-8'));
+        original = Array.isArray(meta.list) ? meta.list : [];
+      } else {
+        original = Array.isArray(batchScheduler.originalList) ? batchScheduler.originalList : [];
+      }
+      const successes = Array.isArray(batchScheduler.successes) ? batchScheduler.successes : [];
+      const failures = readFailedResults();
+      const successSet = new Set(successes);
+      const failSet = new Set(failures);
+      const remaining = original.filter(x => !successSet.has(x.stationId) && !failSet.has(x.stationId));
+      // 写文本列表
+      const mkTxt = (arr) => arr.map(x => typeof x === 'string' ? x : `${x.stationId}${x.outHeight !== undefined ? ' ' + x.outHeight : ''}`).join('\n');
+      fs.writeFileSync(path.join(config.generatedDir, 'last_success.txt'), mkTxt(successes), 'utf-8');
+      fs.writeFileSync(path.join(config.generatedDir, 'last_failed.txt'), mkTxt(failures), 'utf-8');
+      fs.writeFileSync(path.join(config.generatedDir, 'last_remaining.txt'), mkTxt(remaining), 'utf-8');
+    } catch (e) {
+      log('warn', `Write batch summary files failed: ${e.message}`);
+    }
+    
     res.json({
       success: true,
       wasActive,
       clearedQueued: queued,
       runningBefore: runningCount,
       stoppedRunning: stopped.length,
-      stopErrors
+      stopErrors,
+      successCount: batchScheduler.successCount,
+      failCount: batchScheduler.failCount,
+      completedCount: batchScheduler.completedCount
     });
   } catch (error) {
     log('error', `Batch cancel error: ${error.message}`);
@@ -1223,7 +1730,7 @@ app.post('/api/batch/cancel', (req, res) => {
 // 批量：从TXT读取并并行（或限流并发）启动多个站点
 app.post('/api/batch/run-txt', (req, res) => {
   try {
-    const { txtPath, txtContent, inpstr1Base, inpstr2, inpstr3, concurrency } = req.body || {};
+    const { txtPath, txtContent, inpstr1Base, inpstr2, inpstr3, concurrency, skipFailed = true, skipSucceeded = true } = req.body || {};
     
     if ((!txtPath && !txtContent) || !inpstr1Base) {
       return res.status(400).json({
@@ -1276,6 +1783,46 @@ app.post('/api/batch/run-txt', (req, res) => {
     }
     
     const base = ensureTrailingSlash(inpstr1Base);
+    
+    // 可选：根据历史结果过滤输入列表（剔除失败/已成功）
+    try {
+      const failed = skipFailed ? new Set(readFailedResults()) : new Set();
+      const succeeded = skipSucceeded ? new Set(readStableResults().map(r => r.stationId)) : new Set();
+      const before = list.length;
+      list = list.filter(it => !failed.has(it.stationId) && !succeeded.has(it.stationId));
+      const removed = before - list.length;
+      if (removed > 0) {
+        log('info', `Filtered ${removed} stations by skipFailed=${!!skipFailed}, skipSucceeded=${!!skipSucceeded}`);
+      }
+      // 保存“本次要处理的剩余列表”到文件，便于下次计算
+      try {
+        ensureDirectories();
+        const remainingTxt = list.map(x => `${x.stationId} ${x.outHeight}`).join('\n');
+        fs.writeFileSync(path.join(config.generatedDir, 'last_remaining.txt'), remainingTxt, 'utf-8');
+      } catch (e2) {}
+    } catch (e) {
+      log('warn', `Filtering by history failed: ${e.message}`);
+    }
+    
+    // 记录本轮原始列表与元数据（便于中断后恢复与生成新列表）
+    try {
+      ensureDirectories();
+      const lastBatchMetaFile = path.join(config.generatedDir, 'last_batch.json');
+      const originalList = list.map(it => ({ stationId: it.stationId, outHeight: it.outHeight }));
+      const meta = {
+        startedAt: new Date().toISOString(),
+        options: { inpstr1Base: base, inpstr2: tplInp2, inpstr3: tplInp3 },
+        concurrency: Number.isNaN(parseInt(concurrency, 10)) ? null : parseInt(concurrency, 10),
+        list: originalList
+      };
+      fs.writeFileSync(lastBatchMetaFile, JSON.stringify(meta, null, 2), 'utf-8');
+      log('info', `Saved last batch meta: ${lastBatchMetaFile} (${originalList.length} stations)`);
+      // 同时将本轮原始列表保存为文本（stationId outHeight）
+      const originalTxt = originalList.map(x => `${x.stationId} ${x.outHeight}`).join('\n');
+      fs.writeFileSync(path.join(config.generatedDir, 'last_batch_original.txt'), originalTxt, 'utf-8');
+    } catch (e) {
+      log('warn', `Failed to write last batch meta: ${e.message}`);
+    }
 
     // 如果提供了并发限制，则使用调度器
     const conc = parseInt(concurrency, 10);
@@ -1284,7 +1831,16 @@ app.post('/api/batch/run-txt', (req, res) => {
       batchScheduler.active = true;
       batchScheduler.concurrency = conc;
       batchScheduler.pending = list.slice(); // 按顺序排队
-      batchScheduler.running = batchScheduler.running || new Set();
+      batchScheduler.running = new Map();
+      batchScheduler.successCount = 0;
+      batchScheduler.failCount = 0;
+      batchScheduler.completedCount = 0;
+      batchScheduler.cooldownUntil = 0;
+      batchScheduler.failures = [];
+      batchScheduler.successes = [];
+      batchScheduler.originalList = list.slice();
+    // 清空并初始化失败结果文件
+    writeFailedResults([]);
       batchScheduler.options = {
         inpstr1Base: base,
         inpstr2: tplInp2,
@@ -1556,7 +2112,22 @@ app.delete('/api/log/delete/:filename', (req, res) => {
 // 获取所有稳定结果
 app.get('/api/stable-results', (req, res) => {
   try {
-    const results = readStableResults();
+    const results = readStableResults().map(r => {
+      // 兼容旧数据：补全可选字段，避免前端显示 undefined
+      if (r.sampleCount === undefined && r.sample_count !== undefined) {
+        r.sampleCount = r.sample_count;
+      }
+      if (r.filtered === undefined && r.filter !== undefined) {
+        r.filtered = !!r.filter;
+      }
+      if (r.removedSampleCount === undefined && r.removed_count !== undefined) {
+        r.removedSampleCount = r.removed_count;
+      }
+      if (r.sampleCount === undefined) r.sampleCount = 0;
+      if (r.filtered === undefined) r.filtered = false;
+      if (r.removedSampleCount === undefined) r.removedSampleCount = 0;
+      return r;
+    });
     res.json({
       success: true,
       results: results,
@@ -2012,6 +2583,8 @@ app.post('/api/rtkrcv/start', (req, res) => {
       cwd: config.rtkcrvWorkDir, // 设置工作目录
       windowsHide: true // Windows 下隐藏控制台窗口
     });
+    // 降低子进程优先级，减少CPU争用
+    applyChildPriority(childProcess);
     
     const pid = childProcess.pid;
     const startTime = new Date();
@@ -2143,6 +2716,12 @@ app.post('/api/rtkrcv/stop', (req, res) => {
         message: `站点 ${stationId} 的 RTKRCV 已手动停止`
       }
     });
+    
+    // 清理后端缓存，避免已停止站点继续占用监控页面与内存
+    try { latestData.delete(stationId); } catch (e) {}
+    try { stationStability.delete(stationId); } catch (e) {}
+    try { ecefCache.delete(stationId); } catch (e) {}
+    try { sseLastSent.delete(stationId); } catch (e) {}
     
     res.json({
       success: true,
