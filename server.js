@@ -188,6 +188,22 @@ function startBatchFromList(list, options, concurrency) {
   // 保存当前轮列表到 roundState，便于中断恢复
   roundManager.currentList = list.map(it => ({ stationId: it.stationId, outHeight: it.outHeight }));
   writeRoundState();
+  // 广播轮次开始
+  try {
+    const round = roundManager.enabled ? (roundManager.currentRound || 1) : 1;
+    const totalRounds = roundManager.enabled ? (roundManager.totalRounds || 1) : 1;
+    broadcastToSSE({
+      type: 'round_started',
+      data: {
+        round,
+        totalRounds,
+        count: list.length,
+        startedAt: new Date().toISOString()
+      }
+    });
+  } catch (e) {
+    log('warn', `Broadcast round_started failed: ${e.message}`);
+  }
   // 填充并启动
   batchSchedulerFillSlots(null);
 }
@@ -3089,6 +3105,28 @@ app.get('/api/rtkrcv/status/:configFile', (req, res) => {
       success: false,
       message: '获取状态失败: ' + error.message
     });
+  }
+});
+
+// 轮次状态查询
+app.get('/api/round/state', (req, res) => {
+  try {
+    const now = Date.now();
+    const enabled = !!roundManager.enabled;
+    const state = {
+      enabled,
+      currentRound: enabled ? (roundManager.currentRound || 0) : (batchScheduler.active ? 1 : 0),
+      totalRounds: enabled ? (roundManager.totalRounds || 0) : (batchScheduler.active ? 1 : 0),
+      intervalMs: enabled ? (roundManager.intervalMs || 0) : 0,
+      nextRoundAt: enabled ? (roundManager.nextRoundAt || 0) : 0,
+      waiting: enabled ? (roundManager.nextRoundAt > now) : false,
+      batchActive: !!batchScheduler.active,
+      running: batchScheduler.running ? batchScheduler.running.size : 0,
+      pending: batchScheduler.pending ? batchScheduler.pending.length : 0
+    };
+    res.json({ success: true, state });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
   }
 });
 

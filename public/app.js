@@ -32,6 +32,8 @@ const batchCancelBtn = document.getElementById('batchCancelBtn');
 const batchResults = document.getElementById('batchResults');
 const batchSummary = document.getElementById('batchSummary');
 const batchTableContainer = document.getElementById('batchTableContainer');
+const roundStatusEl = document.getElementById('roundStatus');
+const roundAuxEl = document.getElementById('roundAux');
 const batchConcurrencyInput = document.getElementById('batchConcurrency');
 
 // SSE 连接
@@ -57,6 +59,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadConfigList();
     await loadProcessList();
     await loadStableResults(); // 加载稳定结果历史记录并先行隐藏已稳定站点
+    await loadRoundState(); // 加载轮次状态
     setupEventListeners();
     connectSSE(); // 再连接实时数据流，避免竞态导致已稳定站点重新出现
     
@@ -73,6 +76,47 @@ document.addEventListener('DOMContentLoaded', async () => {
         checkAndClearStaleStations();
     }, 60000); // 每分钟检查一次
 });
+
+// 加载轮次状态
+async function loadRoundState() {
+    try {
+        const resp = await fetch(`${API_BASE_URL}/round/state`);
+        const json = await resp.json();
+        if (json && json.success) {
+            renderRoundState(json.state);
+        }
+    } catch (e) {
+        // 忽略错误
+    }
+}
+
+function renderRoundState(state) {
+    if (!roundStatusEl || !roundAuxEl) return;
+    try {
+        if (!state || (!state.enabled && !state.batchActive)) {
+            roundStatusEl.textContent = '轮次：--';
+            roundStatusEl.className = 'status-badge stopped';
+            roundAuxEl.textContent = '';
+            return;
+        }
+        const round = state.currentRound || 1;
+        const total = state.totalRounds || 1;
+        roundStatusEl.textContent = `轮次：${round}/${total}`;
+        if (state.enabled) {
+            roundStatusEl.className = 'status-badge running';
+        } else {
+            roundStatusEl.className = 'status-badge info';
+        }
+        if (state.waiting && state.nextRoundAt) {
+            const dt = new Date(state.nextRoundAt);
+            const hh = String(dt.getHours()).padStart(2, '0');
+            const mm = String(dt.getMinutes()).padStart(2, '0');
+            roundAuxEl.textContent = `下次开始：${hh}:${mm}`;
+        } else {
+            roundAuxEl.textContent = `运行中：并发${state.running || 0}/${(state.running || 0) + (state.pending || 0)}`;
+        }
+    } catch (_) {}
+}
 
 // 设置事件监听器
 function setupEventListeners() {
@@ -1237,6 +1281,8 @@ function handleSSEMessage(message) {
         handleRtkcrvManualStopped(message.data);
     } else if (message.type === 'round_completed') {
         handleRoundCompleted(message.data);
+    } else if (message.type === 'round_started') {
+        handleRoundStarted(message.data);
     }
 }
 
@@ -1258,6 +1304,26 @@ function handleRoundCompleted(data) {
         showMessage(`✅ 轮次 ${round}/${totalRounds} 完成：已清除 ${stationIds.length} 个站点卡片（成功 ${successIds.size}，失败 ${failIds.size}）`, 'success');
     } catch (e) {
         console.warn('handleRoundCompleted error:', e);
+    }
+}
+
+// 处理轮次开始：更新轮次状态
+function handleRoundStarted(data) {
+    try {
+        const round = data && Number.isFinite(data.round) ? data.round : 1;
+        const totalRounds = data && Number.isFinite(data.totalRounds) ? data.totalRounds : 1;
+        renderRoundState({
+            enabled: totalRounds > 1,
+            currentRound: round,
+            totalRounds: totalRounds,
+            waiting: false,
+            batchActive: true,
+            running: 0,
+            pending: data && data.count ? data.count : 0
+        });
+        showMessage(`🚀 开始第 ${round}/${totalRounds} 轮，站点数：${data && data.count ? data.count : 0}`, 'info');
+    } catch (e) {
+        console.warn('handleRoundStarted error:', e);
     }
 }
 
