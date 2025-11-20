@@ -1437,14 +1437,33 @@ function checkStationStability(stationId, data) {
 
   // 判定是否达到稳定
   if (stability.status === 'collecting') {
-    const required = config.stabilityRequiredSeconds;
-    if (stability.accumulatedFixedSeconds >= required) {
+    const criteria = String(config.stabilityCriteria || 'seconds').toLowerCase();
+    const requiredSeconds = Number.isFinite(config.stabilityRequiredSeconds) ? Number(config.stabilityRequiredSeconds) : 10;
+    const requiredSamples = Number.isFinite(config.stabilityRequiredSamples) ? Number(config.stabilityRequiredSamples) : 70;
+
+    let reached = false;
+    if (criteria === 'samples') {
+      reached = stability.samples.length >= requiredSamples;
+    } else if (criteria === 'both') {
+      reached = (stability.accumulatedFixedSeconds >= requiredSeconds) && (stability.samples.length >= requiredSamples);
+    } else {
+      // 默认按秒
+      reached = stability.accumulatedFixedSeconds >= requiredSeconds;
+    }
+
+    if (reached) {
       const average = calculateAverage(stability.samples);
       stability.average = average;
       stability.status = 'stable';
       stability.endTime = new Date();
 
-      log('info', `✅ Station ${stationId}: 达到稳定状态（容错）。累计固定 ${stability.accumulatedFixedSeconds.toFixed(1)}s，样本数: ${stability.samples.length}`);
+      if (criteria === 'samples') {
+        log('info', `✅ Station ${stationId}: 达到稳定（样本）。样本 ${stability.samples.length}/${requiredSamples}，累计 ${stability.accumulatedFixedSeconds.toFixed(1)}s`);
+      } else if (criteria === 'both') {
+        log('info', `✅ Station ${stationId}: 达到稳定（秒+样本）。${stability.accumulatedFixedSeconds.toFixed(1)}s/${requiredSeconds}s，样本 ${stability.samples.length}/${requiredSamples}`);
+      } else {
+        log('info', `✅ Station ${stationId}: 达到稳定（秒）。累计 ${stability.accumulatedFixedSeconds.toFixed(1)}s/${requiredSeconds}s，样本数 ${stability.samples.length}`);
+      }
 
       // 自动保存稳定结果（防止中断后丢失）
       try {
@@ -1507,7 +1526,13 @@ function checkStationStability(stationId, data) {
 
       return { stable: true, average: average };
     } else {
-      log('debug', `📊 Station ${stationId}: 收集中 ${stability.accumulatedFixedSeconds.toFixed(1)}s / ${required}s, 样本数: ${stability.samples.length}, 非固定连续 ${stability.nonFixedStreakSeconds.toFixed(1)}s`);
+      if (criteria === 'samples') {
+        log('debug', `📊 Station ${stationId}: 收集中 样本 ${stability.samples.length}/${requiredSamples}，累计 ${stability.accumulatedFixedSeconds.toFixed(1)}s，非固定连续 ${stability.nonFixedStreakSeconds.toFixed(1)}s`);
+      } else if (criteria === 'both') {
+        log('debug', `📊 Station ${stationId}: 收集中 ${stability.accumulatedFixedSeconds.toFixed(1)}s/${requiredSeconds}s & 样本 ${stability.samples.length}/${requiredSamples}，非固定连续 ${stability.nonFixedStreakSeconds.toFixed(1)}s`);
+      } else {
+        log('debug', `📊 Station ${stationId}: 收集中 ${stability.accumulatedFixedSeconds.toFixed(1)}s/${requiredSeconds}s，样本数 ${stability.samples.length}，非固定连续 ${stability.nonFixedStreakSeconds.toFixed(1)}s`);
+      }
       return { stable: false, collecting: true, elapsed: stability.accumulatedFixedSeconds, sampleCount: stability.samples.length };
     }
   }
