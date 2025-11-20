@@ -13,14 +13,14 @@ const config = {
   // 模板配置文件路径
   templatePath: process.env.TEMPLATE_PATH || (
     isLinux 
-      ? '/root/ppp_station_monitor/auto_config/bbb.conf'
+      ? '/root/ppp_station_monitor/rtk_config/bbb.conf'
       : path.join(__dirname, 'bbb.conf')
   ),
   
   // 生成的配置文件存储目录
   generatedDir: process.env.GENERATED_DIR || (
     isLinux
-      ? '/root/ppp_station_monitor/auto_config/generated'
+      ? '/root/ppp_station_monitor/rtk_config/generated'
       : path.join(__dirname, 'generated')
   ),
   
@@ -30,14 +30,14 @@ const config = {
   // RTKRCV 可执行文件路径
   rtkcrvPath: process.env.RTKRCV_PATH || (
     isLinux
-      ? '/root/ppp_station_monitor/auto_config/generated/rtkrcv'  // Linux 默认路径
+      ? '/root/ppp_station_monitor/rtk_config/generated/rtkrcv'  // Linux 默认路径
       : 'rtkrcv.exe'  // Windows 从 PATH 或当前目录查找
   ),
   
   // RTKRCV 工作目录（启动时的当前目录）
   rtkcrvWorkDir: process.env.RTKRCV_WORKDIR || (
     isLinux
-      ? '/root/ppp_station_monitor/auto_config/generated'
+      ? '/root/ppp_station_monitor/rtk_config/generated'
       : path.join(__dirname, 'generated')
   ),
   
