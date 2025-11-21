@@ -179,6 +179,22 @@
                         <input type="number" id="batchConcurrency" min="1" max="50" value="5" style="max-width:180px;">
                     </div>
 
+                    <div class="form-group">
+                        <label for="batchRounds">
+                            <span class="label-text">轮次数</span>
+                            <span class="label-hint">≥2 启用多轮；第二轮起只计算上一轮成功的站</span>
+                        </label>
+                        <input type="number" id="batchRounds" min="1" max="10" value="1" style="max-width:180px;">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="batchRoundInterval">
+                            <span class="label-text">轮次间隔（分钟）</span>
+                            <span class="label-hint">各轮之间的等待时间，默认 20 分钟</span>
+                        </label>
+                        <input type="number" id="batchRoundInterval" min="1" max="1440" value="20" style="max-width:180px;">
+                    </div>
+
                     <div class="realtime-status" style="margin-top:8px;">
                         <span id="roundStatus" class="status-badge stopped">轮次：--</span>
                         <span id="roundAux" style="margin-left:8px; color:var(--text-light);"></span>

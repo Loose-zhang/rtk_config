@@ -34,6 +34,8 @@ const batchSummary = document.getElementById('batchSummary');
 const batchTableContainer = document.getElementById('batchTableContainer');
 const roundStatusEl = document.getElementById('roundStatus');
 const roundAuxEl = document.getElementById('roundAux');
+const batchRoundsInput = document.getElementById('batchRounds');
+const batchRoundIntervalInput = document.getElementById('batchRoundInterval');
 const batchConcurrencyInput = document.getElementById('batchConcurrency');
 
 // SSE 连接
@@ -270,6 +272,15 @@ async function handleBatchRun() {
         if (v3) payload.inpstr3 = v3;
         const concVal = parseInt((batchConcurrencyInput && batchConcurrencyInput.value) || '5', 10);
         if (!isNaN(concVal) && concVal > 0) payload.concurrency = concVal;
+        // 多轮参数
+        const roundsVal = parseInt((batchRoundsInput && batchRoundsInput.value) || '1', 10);
+        if (!isNaN(roundsVal) && roundsVal >= 2) {
+            payload.rounds = roundsVal;
+            const intervalVal = parseInt((batchRoundIntervalInput && batchRoundIntervalInput.value) || '20', 10);
+            if (!isNaN(intervalVal) && intervalVal > 0) {
+                payload.roundIntervalMinutes = intervalVal;
+            }
+        }
 
         // 按钮loading
         const original = batchRunBtn.innerHTML;
