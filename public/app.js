@@ -1294,6 +1294,8 @@ function handleSSEMessage(message) {
         handleRoundCompleted(message.data);
     } else if (message.type === 'round_started') {
         handleRoundStarted(message.data);
+    } else if (message.type === 'stable_results_cleared') {
+        handleStableResultsCleared(message.data);
     }
 }
 
@@ -1311,6 +1313,12 @@ function handleRoundCompleted(data) {
             clearStationCard(String(sid));
         });
 
+        // 清空“稳定结果历史记录”以便新一轮开始
+        try {
+            stableResultsAll = [];
+            renderStableResults();
+        } catch (_) {}
+
         renderRealtimeData();
         showMessage(`✅ 轮次 ${round}/${totalRounds} 完成：已清除 ${stationIds.length} 个站点卡片（成功 ${successIds.size}，失败 ${failIds.size}）`, 'success');
     } catch (e) {
@@ -1323,6 +1331,16 @@ function handleRoundStarted(data) {
     try {
         const round = data && Number.isFinite(data.round) ? data.round : 1;
         const totalRounds = data && Number.isFinite(data.totalRounds) ? data.totalRounds : 1;
+
+        // 新一轮开始：清空禁止显示集合与清理定时器，确保新数据可显示
+        try {
+            clearedStations.clear();
+            stationClearTimers.forEach((info, sid) => {
+                try { clearTimeout(info.timerId); } catch (_) {}
+            });
+            stationClearTimers.clear();
+        } catch (_) {}
+
         renderRoundState({
             enabled: totalRounds > 1,
             currentRound: round,
@@ -1335,6 +1353,17 @@ function handleRoundStarted(data) {
         showMessage(`🚀 开始第 ${round}/${totalRounds} 轮，站点数：${data && data.count ? data.count : 0}`, 'info');
     } catch (e) {
         console.warn('handleRoundStarted error:', e);
+    }
+}
+
+// 处理清空稳定结果历史
+function handleStableResultsCleared(data) {
+    try {
+        stableResultsAll = [];
+        renderStableResults();
+        showMessage('🧹 已清空稳定结果历史记录（新一轮开始前释放空间）', 'info');
+    } catch (e) {
+        console.warn('handleStableResultsCleared error:', e);
     }
 }
 

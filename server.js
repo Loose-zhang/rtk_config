@@ -272,11 +272,20 @@ function onBatchCompleted() {
           stationIds,
           successIds,
           failIds,
+          stableResultsCleared: true,
           finishedAt: new Date().toISOString()
         }
       });
     } catch (e) {
       log('warn', `Broadcast round_completed failed: ${e.message}`);
+    }
+
+    // 清空稳定结果历史文件，为新一轮释放空间（数据库已保存）
+    try {
+      writeStableResults([]);
+      log('info', 'Cleared stable_results.json after round completion');
+    } catch (e) {
+      log('warn', `Clear stable_results.json failed: ${e.message}`);
     }
 
     // 更新轮次管理状态
