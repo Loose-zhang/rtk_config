@@ -53,7 +53,7 @@ const config = {
   // 稳定性判定方式：'seconds'（按累计秒数）|'samples'（按样本）|'both'（两者都满足）
   stabilityCriteria: (process.env.STABILITY_CRITERIA || 'both').toLowerCase(),
   // 连续固定解样本个数阈值
-  stabilityRequiredSamples: parseInt(process.env.STABILITY_REQUIRED_SAMPLES || '70', 10),
+  stabilityRequiredSamples: parseInt(process.env.STABILITY_REQUIRED_SAMPLES || '40', 10),
   // 允许的非固定连续秒数，超过则重置收集
   nonFixedToleranceSeconds: parseFloat(process.env.NON_FIXED_TOLERANCE_SECONDS || '5'),
   // 为避免时间戳异常导致跳变，限制单次样本计入的最大间隔（秒）

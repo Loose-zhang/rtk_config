@@ -1,14 +1,58 @@
 {
-  "startedAt": "2025-11-20T03:55:54.024Z",
+  "startedAt": "2025-11-23T13:05:58.658Z",
   "options": {
     "inpstr1Base": "beidou:29832611@8.134.185.53:8001/",
-    "inpstr2": "cvmh12222:fyx74729@120.253.226.97:8001/RTCM33_GRCEJ",
+    "inpstr2": "cvmh2734:fyx96499@120.253.226.97:8001/RTCM33_GRCEJ",
     "inpstr3": "Ming:@Zhang12345@ntrip.data.gnss.ga.gov.au:2101/BCEP00BKG0"
   },
-  "concurrency": 5,
+  "concurrency": 10,
   "list": [
     {
-      "stationId": "6516457",
+      "stationId": "8513215",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8516421",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513262",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513312",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6525688",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8507042",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8450764",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8450811",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6541878",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8513236",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8450775",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507016",
       "outHeight": 0
     },
     {
@@ -16,27 +60,55 @@
       "outHeight": 0
     },
     {
-      "stationId": "6516476",
+      "stationId": "8513172",
       "outHeight": 0
     },
     {
-      "stationId": "6516483",
+      "stationId": "8513288",
       "outHeight": 0
     },
     {
-      "stationId": "6516494",
+      "stationId": "8507916",
       "outHeight": 0
     },
     {
-      "stationId": "6522552",
+      "stationId": "8513246",
       "outHeight": 0
     },
     {
-      "stationId": "6522553",
+      "stationId": "2445665",
       "outHeight": 0
     },
     {
-      "stationId": "6522558",
+      "stationId": "6522534",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8516428",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8507005",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8512077",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513157",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6516489",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513170",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513322",
       "outHeight": 0
     },
     {
@@ -44,16 +116,8 @@
       "outHeight": 0
     },
     {
-      "stationId": "6525623",
-      "outHeight": 0
-    },
-    {
-      "stationId": "6539837",
-      "outHeight": 0
-    },
-    {
-      "stationId": "6541861",
-      "outHeight": 0
+      "stationId": "6525681",
+      "outHeight": 1
     },
     {
       "stationId": "6541864",
@@ -64,20 +128,480 @@
       "outHeight": 0
     },
     {
-      "stationId": "8516415",
-      "outHeight": 0
-    },
-    {
       "stationId": "8516419",
       "outHeight": 0
     },
     {
-      "stationId": "8516421",
+      "stationId": "8507979",
       "outHeight": 0
+    },
+    {
+      "stationId": "6525623",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507982",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513127",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6516443",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507954",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507993",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507030",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8512069",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513240",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513169",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8450741",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507039",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507921",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6525653",
+      "outHeight": 1
+    },
+    {
+      "stationId": "6522547",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8513286",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513191",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6521504",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8507997",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8450740",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507014",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8525770",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8525762",
+      "outHeight": 1
+    },
+    {
+      "stationId": "6522578",
+      "outHeight": 1
+    },
+    {
+      "stationId": "6516476",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6525645",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8450785",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513263",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6516494",
+      "outHeight": 1
+    },
+    {
+      "stationId": "6516483",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6522553",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8525730",
+      "outHeight": 1
+    },
+    {
+      "stationId": "2435531",
+      "outHeight": 0
+    },
+    {
+      "stationId": "2445660",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8525734",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8513120",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6522516",
+      "outHeight": 1
+    },
+    {
+      "stationId": "6516460",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6522596",
+      "outHeight": 1
     },
     {
       "stationId": "8516427",
       "outHeight": 0
+    },
+    {
+      "stationId": "8513358",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6539837",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507035",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513173",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513165",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6525680",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8512096",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513297",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8450855",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507962",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6516449",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507949",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513198",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8516415",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6521502",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8513133",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507991",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513313",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507031",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8512074",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6516475",
+      "outHeight": 0
+    },
+    {
+      "stationId": "2435540",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513135",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513346",
+      "outHeight": 0
+    },
+    {
+      "stationId": "2435528",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8450752",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507990",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513128",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513242",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513161",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513231",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8450791",
+      "outHeight": 0
+    },
+    {
+      "stationId": "2435530",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6522558",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8512093",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8450743",
+      "outHeight": 0
+    },
+    {
+      "stationId": "2435539",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513188",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513311",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513142",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6522537",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8507938",
+      "outHeight": 0
+    },
+    {
+      "stationId": "2445676",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513317",
+      "outHeight": 0
+    },
+    {
+      "stationId": "3541866",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507001",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513227",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6516457",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6522552",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6541861",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513144",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8512082",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8516405",
+      "outHeight": 1
+    },
+    {
+      "stationId": "6521500",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8450838",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513267",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513345",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6522524",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8450744",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507942",
+      "outHeight": 0
+    },
+    {
+      "stationId": "2435543",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8450825",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513248",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513139",
+      "outHeight": 0
+    },
+    {
+      "stationId": "2419409",
+      "outHeight": 0
+    },
+    {
+      "stationId": "6525703",
+      "outHeight": 1
+    },
+    {
+      "stationId": "8507994",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513166",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8525741",
+      "outHeight": 1
+    },
+    {
+      "stationId": "2435536",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513199",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513251",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8450779",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513359",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8507012",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8513351",
+      "outHeight": 0
+    },
+    {
+      "stationId": "8522614",
+      "outHeight": 1
     }
   ]
 }

@@ -1448,7 +1448,7 @@ function checkStationStability(stationId, data) {
   if (stability.status === 'collecting') {
     const criteria = String(config.stabilityCriteria || 'seconds').toLowerCase();
     const requiredSeconds = Number.isFinite(config.stabilityRequiredSeconds) ? Number(config.stabilityRequiredSeconds) : 10;
-    const requiredSamples = Number.isFinite(config.stabilityRequiredSamples) ? Number(config.stabilityRequiredSamples) : 70;
+    const requiredSamples = Number.isFinite(config.stabilityRequiredSamples) ? Number(config.stabilityRequiredSamples) : 40;
 
     let reached = false;
     if (criteria === 'samples') {
