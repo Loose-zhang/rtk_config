@@ -84,7 +84,7 @@ const roundManager = {
   intervalMs: 0,
   nextRoundTimer: null,
   nextRoundAt: 0, // timestamp ms
-  // 保存第一轮的原始完整列表（包含 outHeight），后续轮依据成功站点过滤得到下一轮列表
+  // 保存第一轮的原始完整列表（包含 outHeight），后续轮继续使用同一列表（失败站点不会被剔除）
   seedOriginalList: [], // [{ stationId, outHeight }]
   // 上一轮成功的站点ID数组
   lastRoundSuccesses: [],
@@ -214,10 +214,12 @@ function scheduleNextRoundIfNeeded() {
     disableRounds();
     return;
   }
-  // 计算下一轮列表：上一轮成功的站点
-  const nextList = listFromSuccesses(roundManager.lastRoundSuccesses, roundManager.seedOriginalList);
+  // 计算下一轮列表：始终使用最初的完整列表（失败站点不会被剔除）
+  const nextList = Array.isArray(roundManager.seedOriginalList)
+    ? roundManager.seedOriginalList.map(it => ({ stationId: it.stationId, outHeight: it.outHeight }))
+    : [];
   if (!nextList.length) {
-    log('warn', 'Next round has no stations (no successes). Rounds will be disabled.');
+    log('warn', 'Next round has no stations (empty seed list). Rounds will be disabled.');
     disableRounds();
     return;
   }
@@ -334,7 +336,9 @@ function resumeRoundsIfNeeded() {
         roundManager.nextRoundTimer = setTimeout(() => {
           try {
             roundManager.currentRound += 1;
-            const nextList = listFromSuccesses(roundManager.lastRoundSuccesses, roundManager.seedOriginalList);
+            const nextList = Array.isArray(roundManager.seedOriginalList)
+              ? roundManager.seedOriginalList.map(it => ({ stationId: it.stationId, outHeight: it.outHeight }))
+              : [];
             const conc = (roundManager.options && roundManager.options.concurrency) ? roundManager.options.concurrency : 5;
             log('info', `Starting resumed round ${roundManager.currentRound}/${roundManager.totalRounds} with ${nextList.length} stations.`);
             startBatchFromList(nextList, roundManager.options, conc);
@@ -346,7 +350,9 @@ function resumeRoundsIfNeeded() {
       } else {
         // 已到时间，立即开始下一轮
         roundManager.currentRound += 1;
-        const nextList = listFromSuccesses(roundManager.lastRoundSuccesses, roundManager.seedOriginalList);
+          const nextList = Array.isArray(roundManager.seedOriginalList)
+            ? roundManager.seedOriginalList.map(it => ({ stationId: it.stationId, outHeight: it.outHeight }))
+            : [];
         const conc = (roundManager.options && roundManager.options.concurrency) ? roundManager.options.concurrency : 5;
         log('info', `Starting overdue next round ${roundManager.currentRound}/${roundManager.totalRounds} with ${nextList.length} stations.`);
         startBatchFromList(nextList, roundManager.options, conc);
@@ -396,12 +402,18 @@ function batchMarkComplete(stationId, success) {
       batchScheduler.failCount += 1;
       try {
         batchScheduler.failures.push(stationId);
-        // 同步持久化失败站点列表
-        const existing = readFailedResults();
-        existing.push(stationId);
-        // 轻度去重，避免同站重复多次
-        const unique = Array.from(new Set(existing));
-        writeFailedResults(unique);
+        // 同步持久化失败站点列表，记录轮次与失败序号
+        const existing = readFailedResults(); // [{ stationId, round, index, at }]
+        const round = roundManager.enabled ? (roundManager.currentRound || 1) : 1;
+        const roundFails = existing.filter(item => item && item.round === round);
+        const nextIndex = roundFails.length + 1;
+        existing.push({
+          stationId,
+          round,
+          index: nextIndex,
+          at: new Date().toISOString()
+        });
+        writeFailedResults(existing);
       } catch (e) {}
     }
     batchScheduler.completedCount += 1;
@@ -638,7 +650,7 @@ function ensureDirectories() {
 
 // 稳定结果数据文件路径
 const stableResultsFile = path.join(config.generatedDir, 'stable_results.json');
-// 失败结果数据文件路径（仅记录站点编号列表）
+// 失败结果数据文件路径（记录每次失败的站点、轮次和失败序号）
 const failedResultsFile = path.join(config.generatedDir, 'failed_results.json');
 
 // 读取稳定结果
@@ -668,13 +680,24 @@ function writeStableResults(results) {
   }
 }
 
-// 读取失败结果（站点编号列表）
+// 读取失败结果（数组：{ stationId, round, index, at }）
 function readFailedResults() {
   try {
     if (fs.existsSync(failedResultsFile)) {
       const data = fs.readFileSync(failedResultsFile, 'utf-8');
       const parsed = JSON.parse(data);
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) return [];
+      // 兼容旧格式：纯 stationId 列表
+      return parsed.map((item, idx) => {
+        if (item && typeof item === 'object') {
+          return item;
+        }
+        return {
+          stationId: String(item),
+          round: 0,
+          index: idx + 1
+        };
+      });
     }
     return [];
   } catch (error) {
@@ -683,7 +706,7 @@ function readFailedResults() {
   }
 }
 
-// 写入失败结果（站点编号列表）
+// 写入失败结果（数组：{ stationId, round, index, at }）
 function writeFailedResults(list) {
   try {
     ensureDirectories();
@@ -1814,22 +1837,33 @@ app.get('/api/batch/summary', (req, res) => {
     const successes = Array.isArray(batchScheduler.successes) && batchScheduler.successes.length > 0
       ? batchScheduler.successes.slice()
       : Array.from(new Set(readStableResults().map(r => r.stationId))); // 退化：用已保存稳定结果近似成功集
-    const failures = readFailedResults();
+    const failuresDetail = readFailedResults(); // [{ stationId, round, index, at }]
     const successSet = new Set(successes);
-    const failSet = new Set(failures);
-    const remaining = original.filter(x => !successSet.has(x.stationId) && !failSet.has(x.stationId));
+    // 下一轮/剩余列表仅按成功站点过滤，失败站点不会被排除
+    const remaining = original.filter(x => !successSet.has(x.stationId));
     
-    const toTxt = (arr) => arr.map(x => typeof x === 'string' ? x : `${x.stationId}${x.outHeight !== undefined ? ' ' + x.outHeight : ''}`).join('\n');
-    fs.writeFileSync(path.join(config.generatedDir, 'last_success.txt'), toTxt(successes), 'utf-8');
-    fs.writeFileSync(path.join(config.generatedDir, 'last_failed.txt'), toTxt(failures), 'utf-8');
-    fs.writeFileSync(path.join(config.generatedDir, 'last_remaining.txt'), toTxt(remaining), 'utf-8');
+    const toStationTxt = (arr) => arr.map(x => typeof x === 'string'
+      ? x
+      : `${x.stationId}${x.outHeight !== undefined ? ' ' + x.outHeight : ''}`).join('\n');
+    const toFailedTxt = (arr) => arr.map((f) => {
+      if (!f) return '';
+      if (typeof f === 'string') return f;
+      const parts = [f.stationId];
+      if (typeof f.round === 'number') parts.push(`round:${f.round}`);
+      if (typeof f.index === 'number') parts.push(`idx:${f.index}`);
+      return parts.filter(Boolean).join(' ');
+    }).filter(Boolean).join('\n');
+
+    fs.writeFileSync(path.join(config.generatedDir, 'last_success.txt'), toStationTxt(successes), 'utf-8');
+    fs.writeFileSync(path.join(config.generatedDir, 'last_failed.txt'), toFailedTxt(failuresDetail), 'utf-8');
+    fs.writeFileSync(path.join(config.generatedDir, 'last_remaining.txt'), toStationTxt(remaining), 'utf-8');
     
     res.json({
       success: true,
       counts: {
         original: original.length,
         successes: Array.isArray(successes) ? successes.length : 0,
-        failures: failures.length,
+        failures: Array.isArray(failuresDetail) ? failuresDetail.length : 0,
         remaining: remaining.length
       },
       files: {
@@ -1861,9 +1895,9 @@ app.post('/api/batch/resume', (req, res) => {
     }
     const meta = JSON.parse(fs.readFileSync(lastBatchMetaFile, 'utf-8'));
     const original = Array.isArray(meta.list) ? meta.list : [];
-    const failures = new Set(readFailedResults());
     const successes = new Set(readStableResults().map(r => r.stationId));
-    const remaining = original.filter(x => !failures.has(x.stationId) && !successes.has(x.stationId));
+    // 失败站点仅用于记录，不再作为过滤条件，下一轮继续处理它们
+    const remaining = original.filter(x => !successes.has(x.stationId));
     if (remaining.length === 0) {
       return res.json({ success: true, message: '没有待处理的站点', remaining: 0 });
     }
