@@ -1,6 +1,195 @@
 // API 基础 URL - 自动使用当前访问的域名和端口
 const API_BASE_URL = `${window.location.protocol}//${window.location.host}/api`;
 
+// ========== Int38 HEX 解析器 ==========
+
+/**
+ * 解析 38 位有符号整数（从 10 字符的十六进制字符串）
+ * 移植自 Int38Parser.java
+ * @param {string} hexString - 10个字符的十六进制字符串（40位）
+ * @returns {bigint} 解析后的有符号整数值
+ */
+function parseInt38(hexString) {
+    // 将十六进制字符串转为 BigInt
+    const value40bit = BigInt('0x' + hexString);
+    
+    // 转为二进制字符串并补齐到 40 位
+    let binaryString = value40bit.toString(2);
+    while (binaryString.length < 40) {
+        binaryString = '0' + binaryString;
+    }
+    
+    // 跳过前 2 位，取后 38 位
+    const effectiveBits = binaryString.substring(2);
+    
+    // 将 38 位有效数据转为整数
+    let value = BigInt('0b' + effectiveBits);
+    
+    // 检查是否是负数 (第 38 位为符号位，即 effectiveBits 的第一位)
+    if (effectiveBits.charAt(0) === '1') {
+        // 如果是负数，进行补码处理：value - 2^38
+        const negativeOffset = BigInt(1) << BigInt(38);
+        value = value - negativeOffset;
+    }
+    
+    return value;
+}
+
+/**
+ * 解析完整的 HEX 字符串，提取 ECEF X/Y/Z 坐标
+ * @param {string} input - 完整的十六进制输入字符串（至少44个字符）
+ * @returns {object} 包含 ecefX, ecefY, ecefZ 的对象，以及调试信息
+ */
+function parseEcefFromHex(input) {
+    // 去除空格并转为小写
+    input = input.replace(/\s/g, '').toLowerCase();
+    
+    if (input.length < 44) {
+        throw new Error(`输入字符串长度不足：需要至少 44 个字符，当前 ${input.length} 个字符`);
+    }
+    
+    // 提取各字段（与 Java 版本相同的位置）
+    // substring(14, 24) -> 第 15 到 24 个字符（Java 的 0-indexed）
+    const ecefXHex = input.substring(14, 24);
+    const ecefYHex = input.substring(24, 34);
+    const ecefZHex = input.substring(34, 44);
+    
+    // 解析每个字段
+    const ecefXRaw = parseInt38(ecefXHex);
+    const ecefYRaw = parseInt38(ecefYHex);
+    const ecefZRaw = parseInt38(ecefZHex);
+    
+    // 除以 10000 得到米为单位的坐标
+    const ecefX = Number(ecefXRaw) / 10000;
+    const ecefY = Number(ecefYRaw) / 10000;
+    const ecefZ = Number(ecefZRaw) / 10000;
+    
+    return {
+        ecefX,
+        ecefY,
+        ecefZ,
+        debug: {
+            inputLength: input.length,
+            ecefXHex,
+            ecefYHex,
+            ecefZHex,
+            ecefXRaw: ecefXRaw.toString(),
+            ecefYRaw: ecefYRaw.toString(),
+            ecefZRaw: ecefZRaw.toString()
+        }
+    };
+}
+
+/**
+ * 处理 HEX 解析按钮点击
+ */
+function handleParseHex() {
+    const hexInput = document.getElementById('hexInput');
+    const resultSection = document.getElementById('hexParseResult');
+    const ecefXResult = document.getElementById('ecefXResult');
+    const ecefYResult = document.getElementById('ecefYResult');
+    const ecefZResult = document.getElementById('ecefZResult');
+    const debugInfo = document.getElementById('hexDebugInfo');
+    
+    const input = hexInput.value.trim();
+    
+    if (!input) {
+        showMessage('❌ 请输入十六进制字符串', 'error');
+        return;
+    }
+    
+    try {
+        const result = parseEcefFromHex(input);
+        
+        // 显示结果（保留4位小数）
+        ecefXResult.textContent = result.ecefX.toFixed(4);
+        ecefYResult.textContent = result.ecefY.toFixed(4);
+        ecefZResult.textContent = result.ecefZ.toFixed(4);
+        
+        // 更新调试信息
+        debugInfo.innerHTML = `
+            <div class="debug-section">
+                <h4>🔍 解析详情</h4>
+                <div class="debug-grid">
+                    <div class="debug-item">
+                        <span class="debug-label">输入长度:</span>
+                        <span class="debug-value">${result.debug.inputLength} 字符</span>
+                    </div>
+                    <div class="debug-item">
+                        <span class="debug-label">X 字段 HEX:</span>
+                        <span class="debug-value hex-code">${result.debug.ecefXHex}</span>
+                    </div>
+                    <div class="debug-item">
+                        <span class="debug-label">Y 字段 HEX:</span>
+                        <span class="debug-value hex-code">${result.debug.ecefYHex}</span>
+                    </div>
+                    <div class="debug-item">
+                        <span class="debug-label">Z 字段 HEX:</span>
+                        <span class="debug-value hex-code">${result.debug.ecefZHex}</span>
+                    </div>
+                    <div class="debug-item">
+                        <span class="debug-label">X 原始值 (×10000):</span>
+                        <span class="debug-value">${result.debug.ecefXRaw}</span>
+                    </div>
+                    <div class="debug-item">
+                        <span class="debug-label">Y 原始值 (×10000):</span>
+                        <span class="debug-value">${result.debug.ecefYRaw}</span>
+                    </div>
+                    <div class="debug-item">
+                        <span class="debug-label">Z 原始值 (×10000):</span>
+                        <span class="debug-value">${result.debug.ecefZRaw}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // 显示结果区域
+        resultSection.style.display = 'block';
+        resultSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        
+        showMessage('✅ 解析成功！', 'success');
+        
+    } catch (error) {
+        console.error('HEX 解析错误:', error);
+        showMessage(`❌ 解析失败：${error.message}`, 'error');
+    }
+}
+
+/**
+ * 清空 HEX 输入和结果
+ */
+function handleClearHex() {
+    document.getElementById('hexInput').value = '';
+    document.getElementById('hexParseResult').style.display = 'none';
+    document.getElementById('hexDebugInfo').style.display = 'none';
+}
+
+/**
+ * 切换调试信息显示
+ */
+function toggleHexDebug() {
+    const debugInfo = document.getElementById('hexDebugInfo');
+    if (debugInfo.style.display === 'none') {
+        debugInfo.style.display = 'block';
+    } else {
+        debugInfo.style.display = 'none';
+    }
+}
+
+/**
+ * 复制全部 ECEF 坐标
+ */
+function copyAllEcef() {
+    const x = document.getElementById('ecefXResult').textContent;
+    const y = document.getElementById('ecefYResult').textContent;
+    const z = document.getElementById('ecefZResult').textContent;
+    
+    const text = `ECEF_X: ${x} m\nECEF_Y: ${y} m\nECEF_Z: ${z} m`;
+    copyToClipboard(text);
+}
+
+// ========== 原有代码 ==========
+
 // 当前生成的文件信息
 let currentFile = null;
 
@@ -147,6 +336,23 @@ function setupEventListeners() {
         batchTableContainer.innerHTML = '';
     });
     if (batchCancelBtn) batchCancelBtn.addEventListener('click', handleBatchCancel);
+    
+    // HEX 解析器事件
+    const parseHexBtn = document.getElementById('parseHexBtn');
+    const clearHexBtn = document.getElementById('clearHexBtn');
+    const hexInput = document.getElementById('hexInput');
+    
+    if (parseHexBtn) parseHexBtn.addEventListener('click', handleParseHex);
+    if (clearHexBtn) clearHexBtn.addEventListener('click', handleClearHex);
+    
+    // 支持按 Enter 键解析
+    if (hexInput) {
+        hexInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                handleParseHex();
+            }
+        });
+    }
 }
 
 // 处理表单提交

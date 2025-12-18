@@ -1168,3 +1168,170 @@ footer {
     }
 }
 
+/* ========== HEX 解析器样式 ========== */
+
+.hex-parse-result {
+    margin-top: 25px;
+    padding: 20px;
+    background: linear-gradient(135deg, #e8f5e9, #c8e6c9);
+    border-radius: 12px;
+    border-left: 5px solid var(--success-color);
+}
+
+.hex-parse-result h3 {
+    color: var(--success-color);
+    margin-bottom: 20px;
+    font-size: 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.hex-result-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.hex-result-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 15px 18px;
+    background: var(--white);
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.hex-result-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.hex-result-label {
+    font-weight: 700;
+    color: var(--primary-color);
+    font-size: 1rem;
+    min-width: 70px;
+}
+
+.hex-result-value {
+    flex: 1;
+    font-family: 'Courier New', monospace;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text-dark);
+    padding: 8px 12px;
+    background: #f8f9fa;
+    border-radius: 6px;
+    border: 1px solid #e9ecef;
+}
+
+.hex-result-unit {
+    font-size: 0.9rem;
+    color: var(--text-light);
+    font-weight: 500;
+}
+
+.btn-copy-small {
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white;
+    border: none;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s ease;
+}
+
+.btn-copy-small:hover {
+    background: linear-gradient(135deg, #764ba2, #667eea);
+    transform: scale(1.05);
+}
+
+.hex-result-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 15px;
+    justify-content: flex-end;
+}
+
+/* 调试信息样式 */
+.hex-debug-info {
+    margin-top: 20px;
+    padding: 15px;
+    background: var(--white);
+    border-radius: 10px;
+    border: 2px dashed #bdc3c7;
+}
+
+.debug-section h4 {
+    color: var(--text-light);
+    font-size: 1rem;
+    margin-bottom: 15px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.debug-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 10px;
+}
+
+.debug-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: #f8f9fa;
+    border-radius: 6px;
+}
+
+.debug-label {
+    font-weight: 600;
+    color: var(--text-light);
+    font-size: 0.85rem;
+    min-width: 130px;
+}
+
+.debug-value {
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    color: var(--text-dark);
+}
+
+.debug-value.hex-code {
+    color: #e74c3c;
+    font-weight: 600;
+    background: #fef5f5;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+    .hex-result-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .hex-result-item {
+        flex-wrap: wrap;
+    }
+    
+    .hex-result-actions {
+        flex-direction: column;
+    }
+    
+    .hex-result-actions .btn {
+        width: 100%;
+        justify-content: center;
+    }
+    
+    .debug-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
