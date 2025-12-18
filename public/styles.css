@@ -1168,23 +1168,68 @@ footer {
     }
 }
 
+/* ========== 对比布局：HEX 解析器 + 稳定结果 ========== */
+
+.compare-grid-container {
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    gap: 15px;
+    align-items: start;
+}
+
+@media (max-width: 1200px) {
+    .compare-grid-container {
+        grid-template-columns: 1fr;
+    }
+}
+
+.hex-parser-card {
+    position: sticky;
+    top: 20px;
+}
+
+.stable-results-card {
+    min-width: 0; /* 防止表格撑破容器 */
+}
+
 /* ========== HEX 解析器样式 ========== */
 
 .hex-parse-result {
-    margin-top: 25px;
-    padding: 20px;
+    margin-top: 15px;
+    padding: 15px;
     background: linear-gradient(135deg, #e8f5e9, #c8e6c9);
-    border-radius: 12px;
-    border-left: 5px solid var(--success-color);
+    border-radius: 10px;
+    border-left: 4px solid var(--success-color);
 }
 
 .hex-parse-result h3 {
     color: var(--success-color);
-    margin-bottom: 20px;
-    font-size: 1.2rem;
+    margin-bottom: 12px;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* 紧凑型结果显示 */
+.hex-result-compact {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.hex-result-row {
     display: flex;
     align-items: center;
     gap: 8px;
+    padding: 10px 12px;
+    background: var(--white);
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.hex-result-row:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .hex-result-grid {
@@ -1213,24 +1258,27 @@ footer {
 .hex-result-label {
     font-weight: 700;
     color: var(--primary-color);
-    font-size: 1rem;
-    min-width: 70px;
+    font-size: 0.9rem;
+    min-width: 25px;
 }
 
 .hex-result-value {
     flex: 1;
     font-family: 'Courier New', monospace;
-    font-size: 1.1rem;
+    font-size: 0.95rem;
     font-weight: 700;
     color: var(--text-dark);
-    padding: 8px 12px;
+    padding: 6px 10px;
     background: #f8f9fa;
-    border-radius: 6px;
+    border-radius: 5px;
     border: 1px solid #e9ecef;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .hex-result-unit {
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     color: var(--text-light);
     font-weight: 500;
 }
@@ -1239,11 +1287,12 @@ footer {
     background: linear-gradient(135deg, #667eea, #764ba2);
     color: white;
     border: none;
-    padding: 6px 10px;
-    border-radius: 6px;
+    padding: 4px 8px;
+    border-radius: 5px;
     cursor: pointer;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     transition: all 0.2s ease;
+    flex-shrink: 0;
 }
 
 .btn-copy-small:hover {
@@ -1253,9 +1302,10 @@ footer {
 
 .hex-result-actions {
     display: flex;
-    gap: 10px;
-    margin-top: 15px;
+    gap: 8px;
+    margin-top: 10px;
     justify-content: flex-end;
+    flex-wrap: wrap;
 }
 
 /* 调试信息样式 */
@@ -1321,17 +1371,21 @@ footer {
         flex-wrap: wrap;
     }
     
-    .hex-result-actions {
-        flex-direction: column;
+    .hex-result-row {
+        flex-wrap: wrap;
     }
     
-    .hex-result-actions .btn {
-        width: 100%;
+    .hex-result-actions {
+        flex-direction: row;
         justify-content: center;
     }
     
     .debug-grid {
         grid-template-columns: 1fr;
+    }
+    
+    .hex-parser-card {
+        position: static; /* 移动端取消 sticky */
     }
 }
 

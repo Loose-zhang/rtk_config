@@ -14,69 +14,6 @@
         </header>
 
         <main>
-            <!-- HEX 解析器 - Int38 ECEF 坐标解析 -->
-            <div class="card">
-                <h2>🔢 HEX 解析器（Int38 ECEF 坐标）</h2>
-                <div class="form-section">
-                    <div class="form-group">
-                        <label for="hexInput">
-                            <span class="label-text">输入十六进制字符串</span>
-                            <span class="label-hint">格式示例: d300133ed67c033c5307b45e8d08fe4ced0612be95f97c970c（至少44个字符）</span>
-                        </label>
-                        <input 
-                            type="text" 
-                            id="hexInput" 
-                            placeholder="粘贴十六进制字符串..."
-                            style="font-family: 'Courier New', monospace;"
-                        >
-                    </div>
-                    <div class="form-actions" style="margin-top: 15px;">
-                        <button type="button" id="parseHexBtn" class="btn btn-primary">
-                            <span>🔍 解析坐标</span>
-                        </button>
-                        <button type="button" id="clearHexBtn" class="btn btn-secondary">
-                            <span>🗑️ 清空</span>
-                        </button>
-                    </div>
-                </div>
-
-                <!-- 解析结果显示 -->
-                <div id="hexParseResult" class="hex-parse-result" style="display: none;">
-                    <h3>📍 解析结果 - ECEF 坐标</h3>
-                    <div class="hex-result-grid">
-                        <div class="hex-result-item">
-                            <span class="hex-result-label">ECEF X:</span>
-                            <span class="hex-result-value" id="ecefXResult">-</span>
-                            <span class="hex-result-unit">m</span>
-                            <button class="btn-copy-small" onclick="copyToClipboard(document.getElementById('ecefXResult').textContent)">📋</button>
-                        </div>
-                        <div class="hex-result-item">
-                            <span class="hex-result-label">ECEF Y:</span>
-                            <span class="hex-result-value" id="ecefYResult">-</span>
-                            <span class="hex-result-unit">m</span>
-                            <button class="btn-copy-small" onclick="copyToClipboard(document.getElementById('ecefYResult').textContent)">📋</button>
-                        </div>
-                        <div class="hex-result-item">
-                            <span class="hex-result-label">ECEF Z:</span>
-                            <span class="hex-result-value" id="ecefZResult">-</span>
-                            <span class="hex-result-unit">m</span>
-                            <button class="btn-copy-small" onclick="copyToClipboard(document.getElementById('ecefZResult').textContent)">📋</button>
-                        </div>
-                    </div>
-                    <div class="hex-debug-info" id="hexDebugInfo" style="display: none;">
-                        <!-- 调试信息将在这里显示 -->
-                    </div>
-                    <div class="hex-result-actions">
-                        <button class="btn btn-info btn-small" onclick="toggleHexDebug()">
-                            🔧 显示/隐藏详情
-                        </button>
-                        <button class="btn btn-success btn-small" onclick="copyAllEcef()">
-                            📋 复制全部
-                        </button>
-                    </div>
-                </div>
-            </div>
-
             <div class="card">
                 <h2>配置参数</h2>
                 <form id="configForm">
@@ -295,17 +232,83 @@
                 </div>
             </div>
 
-            <!-- 稳定结果历史记录 -->
-            <div class="card">
-                <h2>📊 稳定结果历史记录</h2>
-                <div class="stable-results-header">
-                    <p class="subtitle">永久保存所有站点达到稳定后的平均坐标</p>
-                    <button class="btn btn-success btn-small" onclick="exportStableResults()">
-                        📥 导出CSV
-                    </button>
+            <!-- HEX 解析器 + 稳定结果历史记录（并排布局，方便对比） -->
+            <div class="compare-grid-container">
+                <!-- HEX 解析器 - Int38 ECEF 坐标解析 -->
+                <div class="card hex-parser-card">
+                    <h2>🔢 HEX 解析器（Int38 坐标）</h2>
+                    <div class="form-section">
+                        <div class="form-group">
+                            <label for="hexInput">
+                                <span class="label-text">输入十六进制字符串</span>
+                                <span class="label-hint">至少44个字符，将解析 ECEF X/Y/Z</span>
+                            </label>
+                            <input 
+                                type="text" 
+                                id="hexInput" 
+                                placeholder="粘贴十六进制字符串..."
+                                style="font-family: 'Courier New', monospace;"
+                            >
+                        </div>
+                        <div class="form-actions" style="margin-top: 10px;">
+                            <button type="button" id="parseHexBtn" class="btn btn-primary btn-small">
+                                <span>🔍 解析</span>
+                            </button>
+                            <button type="button" id="clearHexBtn" class="btn btn-secondary btn-small">
+                                <span>🗑️ 清空</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 解析结果显示 -->
+                    <div id="hexParseResult" class="hex-parse-result" style="display: none;">
+                        <h3>📍 解析结果 - ECEF 坐标</h3>
+                        <div class="hex-result-compact">
+                            <div class="hex-result-row">
+                                <span class="hex-result-label">X:</span>
+                                <span class="hex-result-value" id="ecefXResult">-</span>
+                                <span class="hex-result-unit">m</span>
+                                <button class="btn-copy-small" onclick="copyToClipboard(document.getElementById('ecefXResult').textContent)" title="复制">📋</button>
+                            </div>
+                            <div class="hex-result-row">
+                                <span class="hex-result-label">Y:</span>
+                                <span class="hex-result-value" id="ecefYResult">-</span>
+                                <span class="hex-result-unit">m</span>
+                                <button class="btn-copy-small" onclick="copyToClipboard(document.getElementById('ecefYResult').textContent)" title="复制">📋</button>
+                            </div>
+                            <div class="hex-result-row">
+                                <span class="hex-result-label">Z:</span>
+                                <span class="hex-result-value" id="ecefZResult">-</span>
+                                <span class="hex-result-unit">m</span>
+                                <button class="btn-copy-small" onclick="copyToClipboard(document.getElementById('ecefZResult').textContent)" title="复制">📋</button>
+                            </div>
+                        </div>
+                        <div class="hex-debug-info" id="hexDebugInfo" style="display: none;">
+                            <!-- 调试信息将在这里显示 -->
+                        </div>
+                        <div class="hex-result-actions" style="margin-top: 10px;">
+                            <button class="btn btn-info btn-small" onclick="toggleHexDebug()">
+                                🔧 详情
+                            </button>
+                            <button class="btn btn-success btn-small" onclick="copyAllEcef()">
+                                📋 复制全部
+                            </button>
+                        </div>
+                    </div>
                 </div>
-                <div id="stableResultsTable" class="stable-results-table">
-                    <p class="loading">加载中...</p>
+
+                <!-- 稳定结果历史记录 -->
+                <div class="card stable-results-card">
+                    <h2>📊 稳定结果历史记录</h2>
+                    <div class="stable-results-header">
+                        <p class="subtitle">永久保存所有站点达到稳定后的平均坐标</p>
+                        <button class="btn btn-success btn-small" onclick="exportStableResults()">
+                            📥 导出CSV
+                        </button>
+                    </div>
+                    <div id="stableResultsTable" class="stable-results-table">
+                        <p class="loading">加载中...</p>
+                    </div>
                 </div>
             </div>
 
