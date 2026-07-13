@@ -1,0 +1,70 @@
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const {
+  parseStationsTxt, readTextFileSmart, extractMountPoint,
+  ensureTrailingSlash, replaceTemplateKey, writeJsonAtomic
+} = require('../lib/store');
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rtktest-'));
+
+function tmpFile(name, bufOrStr) {
+  const p = path.join(tmpDir, name);
+  fs.writeFileSync(p, bufOrStr);
+  return p;
+}
+
+test('parseStationsTxt: UTF-8 基本解析（含注释与空行）', () => {
+  const p = tmpFile('u8.txt', '# comment\n6539837 1\n\n6539840\t0\n// skip\nbad-line\n');
+  const items = parseStationsTxt(p);
+  assert.deepStrictEqual(items, [
+    { stationId: '6539837', outHeight: 1 },
+    { stationId: '6539840', outHeight: 0 }
+  ]);
+});
+
+test('parseStationsTxt: UTF-16LE（带BOM）也能正确解析（B1）', () => {
+  const content = '6539837\t1\r\n6539840\t0\r\n';
+  const buf = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(content, 'utf16le')]);
+  const p = tmpFile('u16.txt', buf);
+  const items = parseStationsTxt(p);
+  assert.deepStrictEqual(items, [
+    { stationId: '6539837', outHeight: 1 },
+    { stationId: '6539840', outHeight: 0 }
+  ]);
+});
+
+test('readTextFileSmart: UTF-8 BOM 被去除', () => {
+  const p = tmpFile('bom.txt', '﻿hello');
+  assert.strictEqual(readTextFileSmart(p), 'hello');
+});
+
+test('extractMountPoint: 从 NTRIP 路径提取挂载点', () => {
+  assert.strictEqual(extractMountPoint('user:pass@host:8001/6539840'), '6539840');
+  assert.strictEqual(extractMountPoint('nopath'), 'default');
+});
+
+test('ensureTrailingSlash', () => {
+  assert.strictEqual(ensureTrailingSlash('a/b'), 'a/b/');
+  assert.strictEqual(ensureTrailingSlash('a/b/'), 'a/b/');
+});
+
+test('replaceTemplateKey: 正常替换', () => {
+  const tpl = 'inpstr1-path       =old  # comment\nother=1\n';
+  const out = replaceTemplateKey(tpl, 'inpstr1-path', 'inpstr1-path       =new');
+  assert.ok(out.includes('=new'));
+  assert.ok(!out.includes('=old'));
+});
+
+test('replaceTemplateKey: 缺少配置项时抛错（B5）', () => {
+  assert.throws(() => replaceTemplateKey('foo=1\n', 'inpstr1-path', 'x'), /模板缺少配置项/);
+});
+
+test('writeJsonAtomic: 写入后可读回，且无残留tmp（A4）', () => {
+  const p = path.join(tmpDir, 'atomic.json');
+  writeJsonAtomic(p, [{ a: 1 }]);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(p, 'utf-8')), [{ a: 1 }]);
+  assert.ok(!fs.existsSync(`${p}.tmp`));
+});
