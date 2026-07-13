@@ -5,7 +5,8 @@ const os = require('os');
 const path = require('path');
 const {
   parseStationsTxt, readTextFileSmart, extractMountPoint,
-  ensureTrailingSlash, replaceTemplateKey, writeJsonAtomic
+  ensureTrailingSlash, replaceTemplateKey, writeJsonAtomic,
+  isSafeGeneratedName
 } = require('../lib/store');
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rtktest-'));
@@ -60,6 +61,18 @@ test('replaceTemplateKey: 正常替换', () => {
 
 test('replaceTemplateKey: 缺少配置项时抛错（B5）', () => {
   assert.throws(() => replaceTemplateKey('foo=1\n', 'inpstr1-path', 'x'), /模板缺少配置项/);
+});
+
+test('isSafeGeneratedName: 拒绝目录穿越与路径分隔符', () => {
+  assert.strictEqual(isSafeGeneratedName('6539840.conf'), true);
+  assert.strictEqual(isSafeGeneratedName('6539840.log'), true);
+  assert.strictEqual(isSafeGeneratedName('../README.md'), false);
+  assert.strictEqual(isSafeGeneratedName('..\\config.js'), false);
+  assert.strictEqual(isSafeGeneratedName('a/b.conf'), false);
+  assert.strictEqual(isSafeGeneratedName('..'), false);
+  assert.strictEqual(isSafeGeneratedName('/etc/passwd'), false);
+  assert.strictEqual(isSafeGeneratedName(''), false);
+  assert.strictEqual(isSafeGeneratedName(null), false);
 });
 
 test('writeJsonAtomic: 写入后可读回，且无残留tmp（A4）', () => {

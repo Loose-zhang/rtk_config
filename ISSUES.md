@@ -9,7 +9,7 @@
 | S1 | NTRIP 账号密码明文落盘 | `generated/last_batch.json`、`generated/last_batch_original.txt` | 含 beidou、ytcors、GA 的账号密码 |
 | S2 | MySQL 默认凭据硬编码 | `config.js` | 默认 root/root，未强制走环境变量（.env.example 已提示改密） |
 | S3 | API 无鉴权 + CORS `*` | `lib/routes.js` 全部路由 | 删除文件、停止进程等危险接口对外开放 |
-| S4 | 路径遍历漏洞 | `/api/download/:filename`、`/api/rtkrcv/log/:logFile` | 未校验 `..`（`/api/config/*` 已有校验）；公网部署前必须处理 |
+| ~~S4~~ | ~~路径遍历漏洞~~ ✅ 已修复 | `lib/store.js` | 防护集中于 `isSafeGeneratedName`/`resolveGeneratedFile`，全部文件接口经由统一解析，实测 `..%2F` 返回 400/404 |
 
 ## 二、正确性 / Bug ✅ 已修复
 
@@ -57,6 +57,16 @@
 | R7 | P1 | `/api/batch/cancel` 遗留 running 记录与 30 分钟超时定时器（可能误杀新批次同名站点），`stopRunning` 仅普通 kill | 取消时无条件清除全部 timeoutTimer 并清空 `batchScheduler.running`；停止进程改用 `killProcessWithTimeout` | 实测：取消后 running 为空，拒绝退出的进程被 SIGKILL 兜底清理 |
 
 另：config.js 已统一为 LF 并去除行尾空白，`git diff --check` 通过。
+
+## 六、功能变更（2026-07-13 第三轮）✅
+
+| # | 变更 | 说明 |
+|---|------|------|
+| F1 | 稳定解页面改为数据库读取 | `GET /api/stable-results` 优先 MySQL（`source:"database"`），JSON 仅作不可用回退；删除同步删库；手动保存也写库；旧表自动补 `sample_count/filtered/removed_count` 列；修复 createPool 假成功导致的 500 |
+| F2 | 设备文件夹布局 | 新文件位于 `generated/<设备号>/<设备号>.conf\|.log`，兼容旧平铺布局；删除时新旧位置全部清理，空设备文件夹自动移除 |
+| F3 | 复测修复 | 新旧文件并存时删除不彻底 → `resolveGeneratedFileAll` 全位置删除；下载接口目录穿越 → 校验集中于 `isSafeGeneratedName`（同时覆盖 S4） |
+
+待办：真实 MySQL 环境的集成验证（沙箱无法安装数据库）。上线后执行 `curl http://localhost:3000/api/stable-results | head` 确认 `source:"database"`。
 
 ## 部署注意（本次改动上线时）
 
