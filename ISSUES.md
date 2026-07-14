@@ -55,6 +55,7 @@
 | R5 | P2 | `LOG_LEVELS[level] \|\| 1` 把 debug(0) 错误提升为 info，LOG_LEVEL=info 仍刷 DEBUG 日志 | 改用 `??`（该 bug 原代码即存在） | 新增 test/logger.test.js 4 个用例（共 31 个测试通过） |
 | R6 | P2 | 手动停止 API（`/api/rtkrcv/stop`）仍在进程退出前补位 | 改用 `killProcessWithTimeout`；清除定时器并移出 running 后不再立即补位，由 exit 事件驱动 | 实测：宽限期内 B 不启动，SIGKILL 后 B 补位 |
 | R7 | P1 | `/api/batch/cancel` 遗留 running 记录与 30 分钟超时定时器（可能误杀新批次同名站点），`stopRunning` 仅普通 kill | 取消时无条件清除全部 timeoutTimer 并清空 `batchScheduler.running`；停止进程改用 `killProcessWithTimeout` | 实测：取消后 running 为空，拒绝退出的进程被 SIGKILL 兜底清理 |
+| R8 | P1 | 数据库未保存成功时，批次完成仍清空 `stable_results.json`，导致稳定坐标永久丢失 | JSON 改为持久兜底且不再按轮次清空；数据库写入返回明确结果；启动和查询时双向合并并补写缺失记录 | 34 项测试通过；实测调用批次完成钩子前后 JSON 哈希与 10 条记录均保持不变 |
 
 另：config.js 已统一为 LF 并去除行尾空白，`git diff --check` 通过。
 
@@ -62,7 +63,7 @@
 
 | # | 变更 | 说明 |
 |---|------|------|
-| F1 | 稳定解页面改为数据库读取 | `GET /api/stable-results` 优先 MySQL（`source:"database"`），JSON 仅作不可用回退；删除同步删库；手动保存也写库；旧表自动补 `sample_count/filtered/removed_count` 列；修复 createPool 假成功导致的 500 |
+| F1 | 稳定解页面改为数据库读取 | `GET /api/stable-results` 优先 MySQL（`source:"database"`），JSON 作为持久兜底并自动与数据库补齐；删除同步删库；手动保存也写库；旧表自动补 `sample_count/filtered/removed_count` 列；修复 createPool 假成功导致的 500 |
 | F2 | 设备文件夹布局 | 新文件位于 `generated/<设备号>/<设备号>.conf\|.log`，兼容旧平铺布局；删除时新旧位置全部清理，空设备文件夹自动移除 |
 | F3 | 复测修复 | 新旧文件并存时删除不彻底 → `resolveGeneratedFileAll` 全位置删除；下载接口目录穿越 → 校验集中于 `isSafeGeneratedName`（同时覆盖 S4） |
 

@@ -74,12 +74,12 @@ generated/           运行时产物（配置、日志、结果，已 gitignore�
 1. 以 `bbb.conf` 为模板替换 `inpstr1/2/3-path`、`out-height`，输出流固定指向本服务 TCP 端口（默认 60000）。模板缺少任一配置项会直接报错而不是静默生成错误配置。
 2. 调度器按并发数（默认 5）启动 rtkrcv，每完成 15 站冷却 5 分钟，单站 30 分钟未固定判失败；支持多轮循环与服务重启后断点续传（`generated/round_state.json`）。
 3. 稳定性判定（可配）：连续固定解累计 `STABILITY_REQUIRED_SECONDS` 秒且样本数达 `STABILITY_REQUIRED_SAMPLES`，容忍 `NON_FIXED_TOLERANCE_SECONDS` 秒内短暂掉固定。
-4. 达到稳定后剔除误差最大的 2 个样本再取平均，结果写入 `generated/stable_results.json`（原子写入）与 MySQL `stable_results` 表，并立即向调度器标记成功。
+4. 达到稳定后剔除误差最大的 2 个样本再取平均，结果先持久写入 `generated/stable_results.json`（原子写入），再写入 MySQL `stable_results` 表，并立即向调度器标记成功。数据库写入失败时 JSON 记录会保留并等待补写。
 5. 每个设备一个文件夹：配置与日志位于 `generated/<设备号>/<设备号>.conf|.log`（兼容旧的平铺布局）；日志超过 `MAX_LOG_SIZE_MB`（默认 20MB）在进程启动时轮转为 `.log.1`。
 
 ## 稳定结果的数据来源
 
-网页"稳定解"列表（`GET /api/stable-results`）优先从 MySQL 读取（持久来源，响应中 `source: "database"`）；`generated/stable_results.json` 每轮完成后会被清空，仅在数据库不可用时作回退（`source: "json-fallback"`）。删除操作会同步删除数据库与 JSON 中的记录。旧版数据库表会在启动时自动补充 `sample_count/filtered/removed_count` 三列。
+网页"稳定解"列表（`GET /api/stable-results`）优先从 MySQL 读取；`generated/stable_results.json` 是持久兜底副本，轮次完成后不会清空。数据库缺少部分记录时，接口会合并 JSON 结果并自动补写数据库（`source: "database+json"`）；数据库完全不可用时返回 JSON（`source: "json-fallback"`）。服务启动时也会执行一次 JSON → MySQL 补写。删除操作会同步删除数据库与 JSON 中的记录。旧版数据库表会在启动时自动补充 `sample_count/filtered/removed_count` 三列。
 
 ## 部署
 

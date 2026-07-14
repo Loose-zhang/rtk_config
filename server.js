@@ -21,8 +21,13 @@ const fs = require('fs');
 const config = require('./config');
 const { log } = require('./lib/logger');
 const state = require('./lib/state');
-const { ensureDirectories } = require('./lib/store');
-const { dbInitMySql } = require('./lib/db');
+const {
+  ensureDirectories,
+  readStableResults,
+  writeStableResults,
+  mergeStableResults
+} = require('./lib/store');
+const db = require('./lib/db');
 const scheduler = require('./lib/scheduler');
 const { startTcpServer } = require('./lib/tcp-server');
 const { registerRoutes } = require('./lib/routes');
@@ -42,14 +47,30 @@ scheduler.init();
 
 // 启动时初始化 MySQL（异步）
 setImmediate(() => {
-  try {
-    const p = dbInitMySql();
-    if (p && typeof p.then === 'function') {
-      p.then(() => {}).catch(e => log('error', `dbInitMySql init error: ${e.message}`));
+  (async () => {
+    try {
+      await db.dbInitMySql();
+      if (db.dbIsReady()) {
+        const jsonResults = readStableResults();
+        const syncResult = await db.dbInsertStableResults(jsonResults);
+        if (syncResult.attempted > 0) {
+          log('info', `Stable result startup sync: ${syncResult.saved}/${syncResult.attempted} saved to database`);
+        }
+        if (syncResult.failed > 0) {
+          log('warn', `${syncResult.failed} stable result(s) remain pending in JSON`);
+        }
+        // 同时把数据库独有的旧记录补回 JSON，使兜底文件保持完整。
+        const databaseResults = await db.dbGetStableResults();
+        const mergedResults = mergeStableResults(databaseResults, jsonResults);
+        if (mergedResults.length !== jsonResults.length) {
+          writeStableResults(mergedResults);
+          log('info', `Stable result JSON backup updated: ${mergedResults.length} total record(s)`);
+        }
+      }
+    } catch (e) {
+      log('error', `dbInitMySql init error: ${e.message}`);
     }
-  } catch (e) {
-    log('error', `dbInitMySql schedule error: ${e.message}`);
-  }
+  })();
 });
 
 // 初始化并启动服务器

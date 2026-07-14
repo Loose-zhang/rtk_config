@@ -6,7 +6,7 @@ const path = require('path');
 const {
   parseStationsTxt, readTextFileSmart, extractMountPoint,
   ensureTrailingSlash, replaceTemplateKey, writeJsonAtomic,
-  isSafeGeneratedName
+  isSafeGeneratedName, mergeStableResults
 } = require('../lib/store');
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rtktest-'));
@@ -80,4 +80,24 @@ test('writeJsonAtomic: 写入后可读回，且无残留tmp（A4）', () => {
   writeJsonAtomic(p, [{ a: 1 }]);
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(p, 'utf-8')), [{ a: 1 }]);
   assert.ok(!fs.existsSync(`${p}.tmp`));
+});
+
+test('mergeStableResults: 合并数据库与 JSON，数据库字段优先且按时间倒序', () => {
+  const jsonResults = [
+    { id: 'a', stationId: 'A', timestamp: '2026-07-14T01:00:00.000Z', height: '1.0', originalSampleCount: 40 },
+    { id: 'b', stationId: 'B', timestamp: '2026-07-14T03:00:00.000Z', height: '2.0' }
+  ];
+  const databaseResults = [
+    { id: 'a', stationId: 'A', timestamp: '2026-07-14T01:00:00.000Z', height: '1.1' },
+    { id: 'c', stationId: 'C', timestamp: '2026-07-14T02:00:00.000Z', height: '3.0' }
+  ];
+
+  const merged = mergeStableResults(databaseResults, jsonResults);
+  assert.deepStrictEqual(merged.map(r => r.id), ['b', 'c', 'a']);
+  assert.strictEqual(merged.find(r => r.id === 'a').height, '1.1');
+  assert.strictEqual(merged.find(r => r.id === 'a').originalSampleCount, 40);
+});
+
+test('mergeStableResults: 非数组输入安全回退为空数组', () => {
+  assert.deepStrictEqual(mergeStableResults(null, undefined), []);
 });
