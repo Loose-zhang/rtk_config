@@ -6,7 +6,7 @@ const path = require('path');
 const {
   parseStationsTxt, readTextFileSmart, extractMountPoint,
   ensureTrailingSlash, replaceTemplateKey, writeJsonAtomic,
-  isSafeGeneratedName, mergeStableResults
+  isSafeGeneratedName, mergeStableResults, filterBatchStationsByHistory
 } = require('../lib/store');
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rtktest-'));
@@ -50,6 +50,33 @@ test('extractMountPoint: 从 NTRIP 路径提取挂载点', () => {
 test('ensureTrailingSlash', () => {
   assert.strictEqual(ensureTrailingSlash('a/b'), 'a/b/');
   assert.strictEqual(ensureTrailingSlash('a/b/'), 'a/b/');
+});
+
+test('filterBatchStationsByHistory: 重复提交默认重新处理全部站点', () => {
+  const list = [
+    { stationId: '6539837', outHeight: 1 },
+    { stationId: '6539840', outHeight: 0 }
+  ];
+  const actual = filterBatchStationsByHistory(list, {
+    failedResults: [{ stationId: '6539837' }],
+    stableResults: [{ stationId: '6539840' }]
+  });
+  assert.deepStrictEqual(actual, list);
+});
+
+test('filterBatchStationsByHistory: 显式启用时仍可跳过历史站点', () => {
+  const list = [
+    { stationId: '6539837', outHeight: 1 },
+    { stationId: '6539840', outHeight: 0 },
+    { stationId: '6539842', outHeight: 1 }
+  ];
+  const actual = filterBatchStationsByHistory(list, {
+    failedResults: [{ stationId: '6539837' }],
+    stableResults: [{ stationId: '6539840' }],
+    skipFailed: true,
+    skipSucceeded: true
+  });
+  assert.deepStrictEqual(actual, [{ stationId: '6539842', outHeight: 1 }]);
 });
 
 test('replaceTemplateKey: 正常替换', () => {

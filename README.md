@@ -54,7 +54,7 @@ generated/           运行时产物（配置、日志、结果，已 gitignore�
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | /api/generate-config | 生成单站配置（inpstr1/2/3、outHeight） |
-| POST | /api/batch/run-txt | 批量启动（txtPath 或 txtContent；concurrency 并发；rounds/roundIntervalMinutes 多轮） |
+| POST | /api/batch/run-txt | 新建批量（默认重新计算提交的全部站点；txtPath 或 txtContent；concurrency 并发；rounds/roundIntervalMinutes 多轮） |
 | POST | /api/batch/resume | 断点续传上次批量（按 last_batch.json 与已成功结果计算剩余） |
 | GET  | /api/batch/status | 调度器状态（运行中/排队/成功/失败/冷却） |
 | GET  | /api/batch/summary | 输出 last_success/failed/remaining.txt 并返回统计 |
@@ -72,7 +72,7 @@ generated/           运行时产物（配置、日志、结果，已 gitignore�
 ## 解算与稳定性判定流程
 
 1. 以 `bbb.conf` 为模板替换 `inpstr1/2/3-path`、`out-height`，输出流固定指向本服务 TCP 端口（默认 60000）。模板缺少任一配置项会直接报错而不是静默生成错误配置。
-2. 调度器按并发数（默认 5）启动 rtkrcv，每完成 15 站冷却 5 分钟，单站 30 分钟未固定判失败；支持多轮循环与服务重启后断点续传（`generated/round_state.json`）。
+2. 调度器按并发数（默认 5）启动 rtkrcv，每完成 15 站冷却 5 分钟，单站 30 分钟未固定判失败；重新提交相同列表或启用多轮时，每次都会重新计算全部站点；支持多轮循环与服务重启后断点续传（`generated/round_state.json`）。
 3. 稳定性判定（可配）：连续固定解累计 `STABILITY_REQUIRED_SECONDS` 秒且样本数达 `STABILITY_REQUIRED_SAMPLES`，容忍 `NON_FIXED_TOLERANCE_SECONDS` 秒内短暂掉固定。
 4. 达到稳定后剔除误差最大的 2 个样本再取平均，结果先持久写入 `generated/stable_results.json`（原子写入），再写入 MySQL `stable_results` 表，并立即向调度器标记成功。数据库写入失败时 JSON 记录会保留并等待补写。
 5. 每个设备一个文件夹：配置与日志位于 `generated/<设备号>/<设备号>.conf|.log`（兼容旧的平铺布局）；日志超过 `MAX_LOG_SIZE_MB`（默认 20MB）在进程启动时轮转为 `.log.1`。
