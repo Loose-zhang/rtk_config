@@ -34,7 +34,9 @@
                     <li data-step="setup">下发 打开所有MSM / 关闭4065 / RTCM MSM4 / 保存</li>
                     <li data-step="cors">填写 CORS 账号，拆分为参考站数据流（数据流 2）</li>
                     <li data-step="connect">测站挂载点改为该设备并检测连接</li>
-                    <li data-step="solve">解算，等待稳定解</li>
+                    <li data-step="solve">解算，等待稳定解
+                        <div id="bcSolveLive" class="bc-live" style="display: none;"></div>
+                    </li>
                     <li data-step="coord">下发 $POLCFGBASE 基站坐标与保存指令</li>
                     <li data-step="verify">单独接收设备 RTCM，1005 与稳定解比对</li>
                     <li data-step="ecef">1005 坐标写入设备参数 ECEF_XYZ</li>

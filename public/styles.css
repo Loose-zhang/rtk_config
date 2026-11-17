@@ -1670,3 +1670,43 @@ footer {
 .bc-cmd-status.sent { color: var(--success-color); }
 .bc-cmd-status.queued { color: var(--warning-color); }
 .bc-cmd-status.cancelled { color: var(--text-light); text-decoration: line-through; }
+
+/* 配置基站：解算实时面板 */
+.bc-live {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: #fff;
+    border: 1px solid var(--border-color);
+    color: var(--text-dark);
+}
+
+.bc-live-now {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    align-items: center;
+    font-size: 0.9rem;
+}
+
+.bc-live-progress {
+    color: var(--text-light);
+}
+
+.bc-q {
+    font-weight: 600;
+}
+
+.bc-q.fix { color: var(--success-color); }
+.bc-q.float { color: var(--warning-color); }
+.bc-q.other { color: var(--danger-color); }
+
+.bc-live-table {
+    margin-top: 6px;
+    font-size: 0.82rem;
+}
+
+.bc-live-table td,
+.bc-live-table th {
+    padding: 3px 6px;
+}

@@ -34,8 +34,10 @@
         busy: false,
         cors: null,
         corsApplied: false,
-        lastEventSeq: 0
+        lastEventSeq: 0,
+        epochs: []
     };
+    const LIVE_ROWS = 10;
 
     const $ = (id) => document.getElementById(id);
 
@@ -495,6 +497,7 @@
             let msg;
             try { msg = JSON.parse(ev.data); } catch (e) { return; }
             if (!msg || !msg.data || String(msg.data.stationId) !== String(bc.launch.deviceId)) return;
+            if (msg.type === 'rtkrcv_data' && !bc.finished) renderLive(msg.data);
             if (msg.type === 'rtkrcv_data' && bc.solving) {
                 const d = msg.data;
                 const st = d.stability || {};
@@ -509,12 +512,70 @@
         };
     }
 
+    // 解算实时面板：最新一历元 + 最近 LIVE_ROWS 个历元
+    function qualityClass(q) {
+        return q === 1 ? 'fix' : q === 2 ? 'float' : 'other';
+    }
+
+    function renderLive(d) {
+        const q = d.quality || {};
+        const llh = d.llh || {};
+        const ecef = d.ecef || {};
+        const st = d.stability || {};
+        const epoch = {
+            time: d.dateTime || d.timestamp || '-',
+            status: q.status,
+            statusText: q.statusText || '-',
+            ratio: q.ambiguity,
+            sats: q.satellites,
+            lat: llh.lat, lon: llh.lon, height: llh.height
+        };
+        const last = bc.epochs[0];
+        if (!last || last.time !== epoch.time) {
+            bc.epochs.unshift(epoch);
+            if (bc.epochs.length > LIVE_ROWS) bc.epochs.length = LIVE_ROWS;
+        }
+        const ratio = (v) => (v == null || !Number.isFinite(Number(v)) ? '-' : Number(v).toFixed(1));
+        let progress = '';
+        if (st.collecting) {
+            progress = `判稳收集：固定解 ${fmt(st.elapsed, 1)}s / ${st.required || '-'}s，样本 ${st.sampleCount || 0}`;
+        } else if (st.stable) {
+            progress = '已稳定';
+        } else {
+            progress = '等待固定解后开始判稳';
+        }
+        const rows = bc.epochs.map((e) => `<tr>
+            <td>${escapeHtml(e.time)}</td>
+            <td class="bc-q ${qualityClass(e.status)}">${escapeHtml(e.statusText)}</td>
+            <td>${ratio(e.ratio)}</td>
+            <td>${e.sats == null ? '-' : escapeHtml(e.sats)}</td>
+            <td class="bc-mono">${escapeHtml(e.lat)}</td>
+            <td class="bc-mono">${escapeHtml(e.lon)}</td>
+            <td class="bc-mono">${escapeHtml(e.height)}</td>
+        </tr>`).join('');
+        const el = $('bcSolveLive');
+        el.style.display = '';
+        el.innerHTML = `<div class="bc-live-now">
+                <span class="bc-q ${qualityClass(q.status)}">${escapeHtml(epoch.statusText)}</span>
+                <span>Ratio <b>${ratio(epoch.ratio)}</b></span>
+                <span>卫星 <b>${epoch.sats == null ? '-' : escapeHtml(epoch.sats)}</b></span>
+                <span>时间 <b>${escapeHtml(epoch.time)}</b></span>
+                <span class="bc-mono">B ${escapeHtml(llh.lat || '-')}  L ${escapeHtml(llh.lon || '-')}  H ${escapeHtml(llh.height || '-')}</span>
+                <span class="bc-mono">X ${escapeHtml(ecef.x || '-')}  Y ${escapeHtml(ecef.y || '-')}  Z ${escapeHtml(ecef.z || '-')}</span>
+                <span class="bc-live-progress">${escapeHtml(progress)}</span>
+            </div>
+            <table class="bc-table bc-live-table"><thead><tr>
+                <th>时间（北京）</th><th>状态</th><th>Ratio</th><th>卫星</th><th>纬度 B</th><th>经度 L</th><th>高程 H</th>
+            </tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
     async function startSolve() {
         const deviceId = String(bc.launch.deviceId);
         const configFile = `${deviceId}.conf`;
         const outHeight = $('bcOutHeight').value;
         $('outHeight').value = outHeight;
         bc.stable = null;
+        bc.epochs = [];
         $('bcSolveBtn').disabled = true;
         setStep('solve', 'active', '生成配置并启动 RTKRCV…');
         ensureSse();
