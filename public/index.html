@@ -14,6 +14,43 @@
         </header>
 
         <main>
+            <!-- 配置基站（由 security-monitor 设备参数 →“配置基站”拉起，平时隐藏） -->
+            <div id="baseConfigCard" class="card base-config-card" style="display: none;">
+                <h2>🛰️ 配置基站 <span id="bcDeviceId" class="bc-device"></span>
+                    <span id="bcSessionBadge" class="status-badge stopped">未连接</span></h2>
+                <div class="bc-meta">
+                    <div>测站挂载点：<code id="bcMount">-</code></div>
+                    <div>1005 允许偏差：<span id="bcTolerance">-</span> m</div>
+                    <div class="bc-height">
+                        <label for="bcOutHeight">高度类型</label>
+                        <select id="bcOutHeight">
+                            <option value="0">0 - 椭球高 (ellipsoidal)</option>
+                            <option value="1" selected>1 - 大地高 (geodetic)</option>
+                        </select>
+                    </div>
+                </div>
+                <ol id="bcSteps" class="bc-steps">
+                    <li data-step="type">设备类型改为基站、清理基站编号</li>
+                    <li data-step="setup">下发 开启RTCM / 关闭4065 / RTCM MSM4 / 保存</li>
+                    <li data-step="connect">测站挂载点改为该设备并检测连接</li>
+                    <li data-step="solve">解算，等待稳定解</li>
+                    <li data-step="coord">下发 $POLCFGBASE 基站坐标与保存指令</li>
+                    <li data-step="verify">单独接收设备 RTCM，1005 与稳定解比对</li>
+                    <li data-step="ecef">1005 坐标写入设备参数 ECEF_XYZ</li>
+                    <li data-step="close">断开与 security-monitor 的连接</li>
+                </ol>
+                <div class="form-actions">
+                    <button type="button" id="bcCheckBtn" class="btn btn-primary">🔌 检测连接</button>
+                    <button type="button" id="bcSolveBtn" class="btn btn-info" disabled>🚀 重新解算</button>
+                    <button type="button" id="bcResendBtn" class="btn btn-secondary" style="display:none;">🔁 重新下发基站坐标</button>
+                    <button type="button" id="bcVerifyBtn" class="btn btn-secondary" style="display:none;">📡 重新校验 1005</button>
+                    <button type="button" id="bcDisconnectBtn" class="btn btn-danger">⏹ 断开连接</button>
+                </div>
+                <div id="bcConnResult" class="bc-section"></div>
+                <div id="bcDetail" class="bc-section"></div>
+                <pre id="bcLog" class="bc-log"></pre>
+            </div>
+
             <div class="card">
                 <h2>配置参数</h2>
                 <form id="configForm">
@@ -90,8 +127,12 @@
                         <button type="reset" class="btn btn-secondary">
                             <span>🔄 重置表单</span>
                         </button>
+                        <button type="button" id="checkConnBtn" class="btn btn-info">
+                            <span>🔌 检测连接</span>
+                        </button>
                     </div>
                 </form>
+                <div id="checkConnResult" class="bc-section"></div>
             </div>
 
             <!-- 结果显示区域 -->
@@ -351,5 +392,6 @@
     </div>
 
     <script src="app.js"></script>
+    <script src="base-config.js"></script>
 </body>
 </html>

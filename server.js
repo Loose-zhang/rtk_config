@@ -14,6 +14,7 @@
 //   scheduler   批量调度与多轮管理
 //   tcp-server  TCP 数据接收（60000端口）
 //   routes      HTTP API 路由
+//   base-config “配置基站”：NTRIP 检测连接、RTCM 1005 校验（ntrip-client / rtcm3）
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
@@ -31,6 +32,7 @@ const db = require('./lib/db');
 const scheduler = require('./lib/scheduler');
 const { startTcpServer } = require('./lib/tcp-server');
 const { registerRoutes } = require('./lib/routes');
+const baseConfig = require('./lib/base-config');
 
 const app = express();
 
@@ -41,6 +43,8 @@ app.use(express.static(config.publicDir));
 
 // 注册所有 API 路由
 registerRoutes(app);
+// “配置基站”流程：检测连接 / 1005 校验（由 security-monitor 拉起）
+baseConfig.registerBaseConfigRoutes(app);
 
 // 将调度器挂接到进程退出事件（B3修复）
 scheduler.init();
@@ -129,6 +133,9 @@ function shutdown(signal) {
 
   // 关闭所有 TCP 客户端
   state.tcpClients.forEach((client) => client.end());
+
+  // 停止 1005 校验任务（关闭 NTRIP 连接）
+  baseConfig.stopAllJobs();
 
   // 关闭所有 SSE 客户端
   state.sseClients.forEach((client) => client.end());

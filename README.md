@@ -68,6 +68,10 @@ generated/           运行时产物（配置、日志、结果，已 gitignore�
 | GET  | /api/rtkrcv/stability | 稳定性收集进度 |
 | GET  | /api/stable-results | 稳定结果（平均坐标）列表 |
 | GET  | /health | 健康检查 |
+| POST | /api/base-config/check-connection | 检测连接：连接 1~3 个 NTRIP 挂载点约 10 秒，返回连接状态与 RTCM 消息类型统计 |
+| POST | /api/base-config/rtcm1005/start | 启动 1005 校验任务（单独接收设备 RTCM，连续 N 次与期望 ECEF 一致即通过） |
+| GET  | /api/base-config/rtcm1005/:jobId | 1005 校验进度/结果 |
+| POST | /api/base-config/rtcm1005/:jobId/stop | 停止 1005 校验 |
 
 ## 解算与稳定性判定流程
 
@@ -112,3 +116,26 @@ pm2 save
 ## 已知待办（安全，暂缓处理）
 
 见 `ISSUES.md` 第一节：API 鉴权、CORS 收紧、下载/日志接口路径遍历校验、凭据管理。内网部署时风险可控，公网部署前必须处理。
+
+## 配置基站（security-monitor 联动）
+
+security-monitor「设备参数」中的 G510 设备有「配置基站」按钮。点击后 security-monitor 会：把设备类型改为基准站并清空其基站编号（parentid）、临时开启 NtripCaster 推送、下发「开启 RTCM / 关闭 4065 / RTCM MSM4 / 保存」指令（设备离线时排队，下次 D3F0 上线补发），然后带一次性 token 打开本页面（`#baseConfig=...`，参数只在 URL 片段中，不会发到服务器）。
+
+本页面顶部出现「配置基站」面板，数据流 1 挂载点自动改为该设备号，之后：
+
+1. **检测连接**：连接数据流 1/2/3，确认能收到设备观测数据（MSM）；通过后自动生成 `<设备号>.conf` 并启动 RTKRCV。
+2. **等待稳定解**：沿用现有稳定性判定；面板默认使用大地高（可改为椭球高）。
+3. **下发基站坐标**：页面只把稳定解 BLH 提交给 security-monitor，由其生成 `$POLCFGBASE,纬度,经度,高度`（9/9/4 位小数）和保存指令下发设备。
+4. **1005 校验**：本服务单独连接设备挂载点解析 RTCM 1005，连续 3 次与稳定解 ECEF 偏差 ≤ 允许值（默认 0.05 m）即通过；旧坐标的 1005 会被自动跳过。
+5. **写入 ECEF 并断开**：1005 坐标提交给 security-monitor，服务端再按已下发坐标复核偏差后写入设备 `ecefx/ecefy/ecefz`，随后关闭会话，并默认关闭该设备的 NtripCaster 推送（中途断开则只撤销本流程临时开启的推送）。
+
+页面关闭时会通知 security-monitor 在 15 秒后关闭会话（刷新页面可由心跳恢复）；页面无心跳 3 分钟后会话也会自动关闭。相关代码：`lib/base-config.js`、`lib/ntrip-client.js`、`lib/rtcm3.js`、`public/base-config.js`。
+
+security-monitor 端配置（`sec-beidou/src/main/resources/application.properties`）：
+
+| 配置项 | 说明 |
+|--------|------|
+| `base-config.rtk-config-url` | 本页面地址；留空时为 `http://<security-monitor 主机>:3000/` |
+| `base-config.ntrip-prefix` | 设备挂载点前缀（`user:pass@host:port/`）；留空时使用本页面「批量运行」中的公共前缀 |
+| `base-config.ecef-tolerance-m` | 1005 与下发坐标的允许偏差，默认 0.05 m |
+
