@@ -192,12 +192,16 @@
             setBadge('已连接 security-monitor', true);
             if (st.setupSent) {
                 setStep('setup', 'done', '已送达设备');
+            } else if (st.sending) {
+                setStep('setup', 'active', `逐条下发中，剩余 ${st.setupPending} 条`);
             } else {
                 setStep('setup', 'active', `设备未处于工作周期，剩余 ${st.setupPending} 条指令排队中，设备上线（D3F0）后自动补发`);
             }
             if (st.coordRequested) {
                 if (st.coordSent) setStep('coord', 'done', '已送达设备');
-                else setStep('coord', 'active', '设备未处于工作周期，指令排队中，设备上线（D3F0）后自动补发');
+                else setStep('coord', 'active', st.sending
+                    ? '逐条下发中…'
+                    : '设备未处于工作周期，指令排队中，设备上线（D3F0）后自动补发');
             }
             return st;
         } catch (e) {
@@ -235,6 +239,23 @@
             if (e.seq <= bc.lastEventSeq) continue;
             bc.lastEventSeq = e.seq;
             logLine(`[security-monitor] ${e.text}`, e.time);
+        }
+    }
+
+    async function resendSetup() {
+        if (bc.finished) return;
+        if (!window.confirm('重新下发 打开所有MSM / 关闭4065 / RTCM MSM4 / 保存 4 条指令？')) return;
+        $('bcResendSetupBtn').disabled = true;
+        try {
+            const st = await remote('/resend-setup');
+            bc.status = st;
+            showCommands(st);
+            await refreshStatus();
+        } catch (e) {
+            logLine(`重新下发设置指令失败：${e.message}`);
+            toast(`❌ ${e.message}`, 'error');
+        } finally {
+            $('bcResendSetupBtn').disabled = bc.finished;
         }
     }
 
@@ -585,7 +606,9 @@
             renderDetail();
             $('bcResendBtn').style.display = '';
             if (!st.coordSent) {
-                setStep('coord', 'active', '设备未处于工作周期，指令排队中，设备上线（D3F0）后自动补发');
+                setStep('coord', 'active', st.sending
+                    ? '逐条下发中…'
+                    : '设备未处于工作周期，指令排队中，设备上线（D3F0）后自动补发');
                 await waitCoordSent();
             }
             if (bc.finished) return;
@@ -701,7 +724,7 @@
             sessionStorage.removeItem(CORS_KEY);
         } catch (e) { /* ignore */ }
         setBadge(completed ? '已完成' : '已断开', false);
-        ['bcCheckBtn', 'bcSolveBtn', 'bcResendBtn', 'bcVerifyBtn', 'bcDisconnectBtn',
+        ['bcCheckBtn', 'bcSolveBtn', 'bcResendBtn', 'bcVerifyBtn', 'bcDisconnectBtn', 'bcResendSetupBtn',
             'bcCorsParseBtn', 'bcCorsApplyBtn']
             .forEach((id) => { $(id).disabled = true; });
     }
@@ -789,6 +812,7 @@
         $('bcCorsApplyBtn').addEventListener('click', applyCors);
         ['bcCorsUser', 'bcCorsPass'].forEach((id) => $(id).addEventListener('input', updateCorsPreview));
         $('bcCheckBtn').addEventListener('click', checkConnection);
+        $('bcResendSetupBtn').addEventListener('click', resendSetup);
         $('bcSolveBtn').addEventListener('click', async () => {
             if (bc.busy || bc.finished) return;
             bc.busy = true;
