@@ -31,7 +31,8 @@
                 </div>
                 <ol id="bcSteps" class="bc-steps">
                     <li data-step="type">设备类型改为基站、清理基站编号</li>
-                    <li data-step="setup">下发 开启RTCM / 关闭4065 / RTCM MSM4 / 保存</li>
+                    <li data-step="setup">下发 打开所有MSM / 关闭4065 / RTCM MSM4 / 保存</li>
+                    <li data-step="cors">填写 CORS 账号，拆分为参考站数据流（数据流 2）</li>
                     <li data-step="connect">测站挂载点改为该设备并检测连接</li>
                     <li data-step="solve">解算，等待稳定解</li>
                     <li data-step="coord">下发 $POLCFGBASE 基站坐标与保存指令</li>
@@ -39,6 +40,27 @@
                     <li data-step="ecef">1005 坐标写入设备参数 ECEF_XYZ</li>
                     <li data-step="close">断开与 security-monitor 的连接</li>
                 </ol>
+                <div class="bc-cors">
+                    <h3>📋 CORS 账号（参考站 · 数据流 2）</h3>
+                    <p class="bc-hint">购买 CORS 账号后，把服务商发来的整段信息原样粘贴到下面，点击“拆分”，核对后应用到数据流 2。也可以直接粘贴 <code>账号:密码@地址:端口/接入点</code>。</p>
+                    <textarea id="bcCorsText" rows="6" spellcheck="false"
+                        placeholder="运营商: …&#10;账号: …&#10;密码: …&#10;IP: …&#10;接入点: …&#10;端口: …"></textarea>
+                    <div class="form-actions">
+                        <button type="button" id="bcCorsParseBtn" class="btn btn-secondary">✂️ 拆分 CORS 信息</button>
+                    </div>
+                    <div id="bcCorsMsg" class="bc-cors-msg"></div>
+                    <div id="bcCorsFields" class="bc-cors-fields" style="display: none;">
+                        <label>账号<input type="text" id="bcCorsUser" autocomplete="off" spellcheck="false"></label>
+                        <label>密码<input type="text" id="bcCorsPass" autocomplete="off" spellcheck="false"></label>
+                        <label>IP / 域名<span id="bcCorsHostBox"></span></label>
+                        <label class="bc-wide">端口（决定参考坐标系）<span id="bcCorsPortBox"></span></label>
+                        <label class="bc-wide">接入点<span id="bcCorsMountBox"></span></label>
+                        <div class="bc-cors-preview">数据流 2：<code id="bcCorsPreview">-</code></div>
+                        <div class="form-actions">
+                            <button type="button" id="bcCorsApplyBtn" class="btn btn-primary">✅ 应用到数据流 2</button>
+                        </div>
+                    </div>
+                </div>
                 <div class="form-actions">
                     <button type="button" id="bcCheckBtn" class="btn btn-primary">🔌 检测连接</button>
                     <button type="button" id="bcSolveBtn" class="btn btn-info" disabled>🚀 重新解算</button>
@@ -46,6 +68,7 @@
                     <button type="button" id="bcVerifyBtn" class="btn btn-secondary" style="display:none;">📡 重新校验 1005</button>
                     <button type="button" id="bcDisconnectBtn" class="btn btn-danger">⏹ 断开连接</button>
                 </div>
+                <div id="bcCmds" class="bc-section"></div>
                 <div id="bcConnResult" class="bc-section"></div>
                 <div id="bcDetail" class="bc-section"></div>
                 <pre id="bcLog" class="bc-log"></pre>
@@ -392,6 +415,7 @@
     </div>
 
     <script src="app.js"></script>
+    <script src="cors-parser.js"></script>
     <script src="base-config.js"></script>
 </body>
 </html>

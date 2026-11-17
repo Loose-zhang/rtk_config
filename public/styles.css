@@ -1555,3 +1555,118 @@ footer {
 .bc-log:empty {
     display: none;
 }
+
+/* 配置基站：CORS 账号拆分 */
+.bc-cors {
+    margin: 4px 0 14px;
+    padding: 12px 14px;
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
+    background: var(--light-bg);
+}
+
+.bc-cors h3 {
+    margin: 0 0 6px;
+    font-size: 1rem;
+}
+
+.bc-hint {
+    margin: 0 0 8px;
+    color: var(--text-light);
+    font-size: 0.9rem;
+}
+
+.bc-cors textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 0.9rem;
+    resize: vertical;
+}
+
+.bc-cors .form-actions {
+    margin-top: 8px;
+}
+
+.bc-cors-msg:empty {
+    display: none;
+}
+
+.bc-cors-msg {
+    margin-top: 8px;
+    font-size: 0.9rem;
+}
+
+.bc-cors-msg .ok { color: var(--success-color); }
+.bc-cors-msg .bad { color: var(--danger-color); }
+
+.bc-cors-fields {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 10px 16px;
+    margin-top: 10px;
+}
+
+.bc-cors-fields label {
+    grid-column: span 2;
+}
+
+.bc-cors-fields label.bc-wide {
+    grid-column: span 3;
+}
+
+@media (max-width: 760px) {
+    .bc-cors-fields { grid-template-columns: 1fr; }
+    .bc-cors-fields label,
+    .bc-cors-fields label.bc-wide { grid-column: auto; }
+}
+
+.bc-cors-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.85rem;
+    color: var(--text-light);
+}
+
+.bc-cors-fields input,
+.bc-cors-fields select {
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 0.9rem;
+    color: var(--text-dark);
+    background: #fff;
+}
+
+.bc-cors-fields .bc-desc {
+    font-size: 0.8rem;
+    color: var(--text-light);
+}
+
+.bc-cors-preview,
+.bc-cors-fields .form-actions {
+    grid-column: 1 / -1;
+}
+
+.bc-cors-preview code {
+    word-break: break-all;
+}
+
+/* 配置基站：下发指令列表 */
+.bc-cmds h3 {
+    margin: 0 0 6px;
+    font-size: 1rem;
+}
+
+.bc-cmd-frame {
+    word-break: break-all;
+    font-size: 0.82rem;
+}
+
+.bc-cmd-status.sent { color: var(--success-color); }
+.bc-cmd-status.queued { color: var(--warning-color); }
+.bc-cmd-status.cancelled { color: var(--text-light); text-decoration: line-through; }

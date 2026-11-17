@@ -3,13 +3,14 @@
 // 启动参数通过 URL 片段 #baseConfig=<json> 传入（不会发送到服务器），
 // 读取后转存 sessionStorage 并从地址栏移除，刷新页面可恢复。
 //
-// 步骤：检测连接 → 解算等待稳定 → security-monitor 下发 $POLCFGBASE+保存
+// 步骤：粘贴 CORS 账号拆分为数据流2 → 检测连接 → 解算等待稳定 → security-monitor 下发 $POLCFGBASE+保存
 //      → 本服务单独接收设备 RTCM，1005 与稳定解比对 → 写入 ECEF → 断开
 (function () {
     'use strict';
 
     const API = (typeof API_BASE_URL !== 'undefined') ? API_BASE_URL : `${window.location.origin}/api`;
     const STORAGE_KEY = 'rtkBaseConfigLaunch';
+    const CORS_KEY = 'rtkBaseConfigCors';
     const HEARTBEAT_MS = 20000;
     const STATUS_POLL_MS = 5000;
     const VERIFY_POLL_MS = 2000;
@@ -30,7 +31,10 @@
         stable: null,
         jobId: null,
         jobTimer: null,
-        busy: false
+        busy: false,
+        cors: null,
+        corsApplied: false,
+        lastEventSeq: 0
     };
 
     const $ = (id) => document.getElementById(id);
@@ -54,10 +58,14 @@
         return Number.isFinite(v) ? v.toFixed(d) : '-';
     }
 
-    function logLine(msg) {
+    function clock(ms) {
+        return new Date(ms == null ? Date.now() : ms).toLocaleTimeString('zh-CN', { hour12: false });
+    }
+
+    function logLine(msg, at) {
         const el = $('bcLog');
         if (!el) return;
-        const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        const t = clock(at);
         el.textContent += `[${t}] ${msg}\n`;
         el.scrollTop = el.scrollHeight;
     }
@@ -179,16 +187,17 @@
         try {
             const st = await remote('/status');
             bc.status = st;
+            showCommands(st);
             bc.sessionAlive = true;
             setBadge('已连接 security-monitor', true);
             if (st.setupSent) {
                 setStep('setup', 'done', '已送达设备');
             } else {
-                setStep('setup', 'active', `设备未在线，剩余 ${st.setupPending} 条指令排队中，设备上线后自动补发`);
+                setStep('setup', 'active', `设备未处于工作周期，剩余 ${st.setupPending} 条指令排队中，设备上线（D3F0）后自动补发`);
             }
             if (st.coordRequested) {
                 if (st.coordSent) setStep('coord', 'done', '已送达设备');
-                else setStep('coord', 'active', '设备未在线，指令排队中，设备上线后自动补发');
+                else setStep('coord', 'active', '设备未处于工作周期，指令排队中，设备上线（D3F0）后自动补发');
             }
             return st;
         } catch (e) {
@@ -200,12 +209,164 @@
         }
     }
 
+    // ------------------------------------------------------------ 下发指令与推送日志
+
+    const CMD_STATUS = { sent: '已下发', queued: '排队中', cancelled: '已取消' };
+
+    // security-monitor 返回的指令列表（含完整 D310 帧）与推送事件
+    function showCommands(st) {
+        if (!st) return;
+        const cmds = st.commands || [];
+        if (cmds.length) {
+            const rows = cmds.map((c) => {
+                const when = c.status === 'sent' && c.sentAt ? ` ${clock(c.sentAt)}` : '';
+                return `<tr>
+                    <td>${escapeHtml(c.seq)}</td>
+                    <td>${escapeHtml(c.name)}</td>
+                    <td class="bc-cmd-status ${escapeHtml(c.status)}">${escapeHtml(CMD_STATUS[c.status] || c.status)}${when}</td>
+                    <td class="bc-mono bc-cmd-frame">${escapeHtml(c.frame)}</td>
+                </tr>`;
+            }).join('');
+            $('bcCmds').innerHTML = `<div class="bc-cmds"><h3>📤 下发指令（设备 ${escapeHtml(st.deviceId)}）</h3>
+                <table class="bc-table"><thead><tr><th>#</th><th>指令</th><th>状态</th><th>下发帧 HEX（D310）</th></tr></thead>
+                <tbody>${rows}</tbody></table></div>`;
+        }
+        for (const e of st.events || []) {
+            if (e.seq <= bc.lastEventSeq) continue;
+            bc.lastEventSeq = e.seq;
+            logLine(`[security-monitor] ${e.text}`, e.time);
+        }
+    }
+
     function stopTimers() {
         clearInterval(bc.heartbeatTimer);
         clearInterval(bc.statusTimer);
         clearInterval(bc.jobTimer);
         clearInterval(bc.solveWatchTimer);
         bc.heartbeatTimer = bc.statusTimer = bc.jobTimer = bc.solveWatchTimer = null;
+    }
+
+
+    // ------------------------------------------------------------ 步骤：CORS 账号 → 数据流 2
+
+    // 有候选项时渲染下拉框，否则渲染文本框供手工填写
+    function renderChoice(boxId, inputId, items, selected) {
+        const box = $(boxId);
+        if (items.length) {
+            const opts = items.map((it) => `<option value="${escapeHtml(it.value)}"${String(it.value) === String(selected) ? ' selected' : ''}>${escapeHtml(it.label)}</option>`).join('');
+            box.innerHTML = `<select id="${inputId}">${opts}</select><span class="bc-desc" id="${inputId}Desc"></span>`;
+        } else {
+            box.innerHTML = `<input type="text" id="${inputId}" autocomplete="off" spellcheck="false" placeholder="未识别，请手动填写"><span class="bc-desc" id="${inputId}Desc"></span>`;
+        }
+        $(inputId).addEventListener('input', updateCorsPreview);
+        $(inputId).addEventListener('change', updateCorsPreview);
+    }
+
+    function corsValues() {
+        return {
+            user: $('bcCorsUser').value.trim(),
+            password: $('bcCorsPass').value.trim(),
+            host: ($('bcCorsHost') ? $('bcCorsHost').value : '').trim(),
+            port: ($('bcCorsPort') ? $('bcCorsPort').value : '').trim(),
+            mount: ($('bcCorsMount') ? $('bcCorsMount').value : '').trim()
+        };
+    }
+
+    function corsError(v) {
+        if (!v.user) return '账号不能为空';
+        if (/[\s:@]/.test(v.user)) return '账号不能包含空格、冒号或 @';
+        if (!v.password) return '密码不能为空';
+        if (/\s/.test(v.password)) return '密码不能包含空格';
+        if (!/^[A-Za-z0-9.-]+$/.test(v.host)) return 'IP/域名格式不正确';
+        const port = Number(v.port);
+        if (!Number.isInteger(port) || port < 1 || port > 65535) return '端口应为 1–65535 的整数';
+        if (!/^[A-Za-z0-9_.\-]+$/.test(v.mount)) return '接入点格式不正确';
+        return '';
+    }
+
+    function descOf(list, key, value) {
+        const it = (list || []).find((x) => String(x[key]) === String(value));
+        return it && it.desc ? it.desc : '';
+    }
+
+    function updateCorsPreview() {
+        const v = corsValues();
+        const p = bc.cors || {};
+        const portDesc = descOf(p.ports, 'port', v.port);
+        const mountDesc = descOf(p.mounts, 'name', v.mount);
+        if ($('bcCorsPortDesc')) $('bcCorsPortDesc').textContent = portDesc;
+        if ($('bcCorsMountDesc')) $('bcCorsMountDesc').textContent = mountDesc;
+        $('bcCorsPreview').textContent = `${v.user || '?'}:${v.password ? '******' : '?'}@${v.host || '?'}:${v.port || '?'}/${v.mount || '?'}`;
+    }
+
+    function corsMsg(html) {
+        $('bcCorsMsg').innerHTML = html;
+    }
+
+    function parseCors() {
+        const text = $('bcCorsText').value;
+        if (!text.trim()) {
+            corsMsg('<span class="bad">请先粘贴 CORS 账号信息</span>');
+            return;
+        }
+        const p = window.CorsParser.parse(text);
+        if (!p.user && !p.password && !p.host && !p.mount) {
+            corsMsg('<span class="bad">没有识别到账号信息，请检查粘贴内容（需要包含 账号/密码/IP/端口/接入点）</span>');
+            return;
+        }
+        bc.cors = p;
+        $('bcCorsUser').value = p.user || '';
+        $('bcCorsPass').value = p.password || '';
+        renderChoice('bcCorsHostBox', 'bcCorsHost', p.hosts.map((h) => ({
+            value: h.host, label: `${h.host}（${h.type === 'ip' ? '数字 IP' : '域名'}）`
+        })), p.host);
+        renderChoice('bcCorsPortBox', 'bcCorsPort', p.ports.map((x) => ({
+            value: x.port, label: x.desc ? `${x.port} — ${x.desc}` : String(x.port)
+        })), p.port);
+        renderChoice('bcCorsMountBox', 'bcCorsMount', p.mounts.map((m) => ({
+            value: m.name, label: m.desc ? `${m.name} — ${m.desc}` : m.name
+        })), p.mount);
+        $('bcCorsFields').style.display = '';
+        updateCorsPreview();
+        const found = `${p.provider ? `${escapeHtml(p.provider)}：` : ''}识别到 ${p.hosts.length} 个地址、${p.ports.length} 个端口、${p.mounts.length} 个接入点`;
+        corsMsg(p.missing.length
+            ? `<span class="bad">${found}；未识别：${escapeHtml(p.missing.join('、'))}，请手动补充</span>`
+            : `<span class="ok">${found}，请核对后点击“应用到数据流 2”</span>`);
+        setStep('cors', 'active', '已拆分，待确认');
+    }
+
+    function applyCorsPath(path, note) {
+        $('inpstr2').value = path;
+        $('inpstr2').dispatchEvent(new Event('blur'));
+        bc.corsApplied = true;
+        try { sessionStorage.setItem(CORS_KEY, JSON.stringify({ path, note })); } catch (e) { /* ignore */ }
+        setStep('cors', 'done', note);
+    }
+
+    function applyCors() {
+        const v = corsValues();
+        const err = corsError(v);
+        if (err) {
+            corsMsg(`<span class="bad">${escapeHtml(err)}</span>`);
+            return;
+        }
+        const path = window.CorsParser.buildPath(v);
+        const portDesc = descOf(bc.cors && bc.cors.ports, 'port', v.port);
+        const note = `${v.host}:${v.port}/${v.mount}${portDesc ? `（${portDesc}）` : ''}`;
+        applyCorsPath(path, note);
+        corsMsg(`<span class="ok">已应用到数据流 2：${escapeHtml(maskPath(path))}，可以点击“检测连接”</span>`);
+        logLine(`CORS 参考站：${v.user}@${note}`);
+    }
+
+    function restoreCors() {
+        let saved = null;
+        try { saved = JSON.parse(sessionStorage.getItem(CORS_KEY) || 'null'); } catch (e) { /* ignore */ }
+        if (saved && saved.path) {
+            applyCorsPath(saved.path, saved.note || maskPath(saved.path));
+            corsMsg(`<span class="ok">已恢复数据流 2：${escapeHtml(maskPath(saved.path))}</span>`);
+        } else {
+            setStep('cors', 'active', '请粘贴 CORS 账号信息并拆分');
+        }
     }
 
     // ------------------------------------------------------------ 步骤 3/4：检测连接
@@ -252,6 +413,19 @@
 
     async function checkConnection() {
         if (bc.busy || bc.finished) return;
+        if (!bc.corsApplied) {
+            const cur = $('inpstr2').value.trim();
+            if (!cur) {
+                setStep('cors', 'error', '请先粘贴 CORS 账号信息并应用到数据流 2');
+                $('bcCorsText').focus();
+                return;
+            }
+            if (!window.confirm(`尚未拆分 CORS 账号。是否直接使用当前数据流 2（${maskPath(cur)}）继续检测？`)) {
+                $('bcCorsText').focus();
+                return;
+            }
+            setStep('cors', 'done', `使用现有数据流 2：${maskPath(cur)}`);
+        }
         bc.busy = true;
         $('bcCheckBtn').disabled = true;
         setStep('connect', 'active', '检测中…');
@@ -265,7 +439,7 @@
             if (!dev.connected || dev.observationFrames === 0) {
                 const st = bc.status;
                 const hint = st && !st.setupSent
-                    ? '设备 RTCM 开启指令尚未送达（设备未在线），请等设备上线后再检测'
+                    ? '设备 打开所有MSM/RTCM MSM4 等指令尚未送达（设备未处于工作周期），请等设备上线后再检测'
                     : (dev.error || '未收到设备观测数据，请确认设备在线且已开启 RTCM');
                 setStep('connect', 'error', hint);
                 logLine(`检测连接失败：${hint}`);
@@ -407,11 +581,11 @@
                 lat: bc.stable.lat, lon: bc.stable.lon, height: bc.stable.height
             });
             bc.status = Object.assign({}, bc.status, st);
-            logLine(`已提交基站坐标：${st.baseCommand}`);
+            showCommands(st);
             renderDetail();
             $('bcResendBtn').style.display = '';
             if (!st.coordSent) {
-                setStep('coord', 'active', '设备未在线，指令排队中，设备上线后自动补发');
+                setStep('coord', 'active', '设备未处于工作周期，指令排队中，设备上线（D3F0）后自动补发');
                 await waitCoordSent();
             }
             if (bc.finished) return;
@@ -522,9 +696,13 @@
         } catch (e) {
             setStep('close', completed ? 'done' : 'error', e.message);
         }
-        try { sessionStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ }
+        try {
+            sessionStorage.removeItem(STORAGE_KEY);
+            sessionStorage.removeItem(CORS_KEY);
+        } catch (e) { /* ignore */ }
         setBadge(completed ? '已完成' : '已断开', false);
-        ['bcCheckBtn', 'bcSolveBtn', 'bcResendBtn', 'bcVerifyBtn', 'bcDisconnectBtn']
+        ['bcCheckBtn', 'bcSolveBtn', 'bcResendBtn', 'bcVerifyBtn', 'bcDisconnectBtn',
+            'bcCorsParseBtn', 'bcCorsApplyBtn']
             .forEach((id) => { $(id).disabled = true; });
     }
 
@@ -606,6 +784,10 @@
         setStep('setup', 'active', '查询中…');
         logLine(`配置基站：设备 ${launch.deviceId}，挂载点 ${maskPath(bc.inpstr1)}`);
 
+        restoreCors();
+        $('bcCorsParseBtn').addEventListener('click', parseCors);
+        $('bcCorsApplyBtn').addEventListener('click', applyCors);
+        ['bcCorsUser', 'bcCorsPass'].forEach((id) => $(id).addEventListener('input', updateCorsPreview));
         $('bcCheckBtn').addEventListener('click', checkConnection);
         $('bcSolveBtn').addEventListener('click', async () => {
             if (bc.busy || bc.finished) return;
@@ -634,10 +816,8 @@
         heartbeat();
         refreshStatus();
         bc.heartbeatTimer = setInterval(heartbeat, HEARTBEAT_MS);
-        bc.statusTimer = setInterval(() => {
-            const st = bc.status;
-            if (!st || !st.setupSent || (st.coordRequested && !st.coordSent)) refreshStatus();
-        }, STATUS_POLL_MS);
+        // 持续刷新：展示指令状态与 security-monitor 推送日志
+        bc.statusTimer = setInterval(refreshStatus, STATUS_POLL_MS);
         card.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
